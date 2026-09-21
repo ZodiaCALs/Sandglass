@@ -19,6 +19,12 @@ enum SandglassApp {
         if let url = folderArgument(after: "--bench") {
             MainActor.assumeIsolated { HeadlessReport.bench(folder: url) }
         }
+        if let url = folderArgument(after: "--flow") {
+            MainActor.assumeIsolated { HeadlessReport.flow(folder: url) }
+        }
+        if let url = folderArgument(after: "--inspect") {
+            MainActor.assumeIsolated { HeadlessReport.inspect(folder: url) }
+        }
 
         let app = NSApplication.shared
         let delegate = AppDelegate()

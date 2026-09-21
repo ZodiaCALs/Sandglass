@@ -35,19 +35,51 @@ final class LibraryModel: ObservableObject {
     /// Remembered between exports so repeat runs are one click.
     @Published var lastExportFolder: URL?
 
-    /// Preview pane zoom.
-    @Published var zoom: Double = 1.0
+    /// Size of the preview canvas in points, reported by the view.
+    ///
+    /// The decode budget is derived from this rather than being a fixed number.
+    /// A fixed high budget is what made navigation feel slow on large files: a
+    /// 6000 px JPEG decoded to 4200 px costs ~70 MB, so a handful of photos
+    /// evicts the whole cache and every step re-decodes from scratch.
+    private var canvasPoints: CGSize = CGSize(width: 820, height: 700)
 
-    /// Zoom bounds, shared so the slider, keyboard and pinch gesture all agree.
-    nonisolated static let minZoom: Double = 1
-    nonisolated static let maxZoom: Double = 6
+    func reportCanvasSize(_ size: CGSize) {
+        guard size.width > 1, size.height > 1 else { return }
+        let changed = abs(size.width - canvasPoints.width) > 8
+            || abs(size.height - canvasPoints.height) > 8
+        guard changed else { return }
+        canvasPoints = size
+        // The pane now needs a different number of pixels, so drop the stale
+        // rendition and fetch one to match.
+        refreshPreviewResolution()
+    }
 
-    private var thumbnails: [String: NSImage] = [:]
+    /// Long-edge pixel budget for the current canvas.
+    ///
+    /// Covers the pane at 2× with a little headroom so resizing the window does
+    /// not immediately need a re-decode, and never exceeds the loader's ceiling.
+    var previewPixelBudget: Int {
+        let needed = max(canvasPoints.width, canvasPoints.height) * Self.retinaScale * 1.2
+        let clamped = min(max(needed, 1024), CGFloat(ThumbnailLoader.maximumPreviewPixel))
+        return Int(clamped.rounded(.up))
+    }
+
+    /// Zoom bounds, shared so the slider, keyboard and gestures all agree.
+    /// The live zoom value itself lives in `ZoomBridge`, next to the canvas.
+    nonisolated static let minZoom: CGFloat = 1
+    nonisolated static let maxZoom: CGFloat = 12
+
+    private var thumbnails: [String: Thumbnail] = [:]
     private var loadingThumbnails: Set<String> = []
     /// Full-resolution previews for the large pane, kept apart from the small
     /// prefetch images in `thumbnails` so a soft preview is never shown as final.
-    private var detailPreviews: [String: NSImage] = [:]
+    private var previewImages: [String: CGImage] = [:]
+    /// Budget each entry in `previewImages` was decoded at, so a window resize
+    /// knows to re-decode.
+    private var previewBudgets: [String: Int] = [:]
     private var detailTasks: [String: Task<Void, Never>] = [:]
+    /// Sharp renditions currently being fetched because of a zoom.
+    private var zoomTasks: Set<String> = []
     private var metadataCache: [String: FileMetadata] = [:]
     private var metadataLoading: Set<String> = []
     /// Keys whose bytes could not be decoded, so the UI can say so instead of
@@ -135,7 +167,8 @@ final class LibraryModel: ObservableObject {
         errorMessage = nil
         for task in detailTasks.values { task.cancel() }
         detailTasks.removeAll()
-        detailPreviews.removeAll()
+        previewImages.removeAll()
+        previewBudgets.removeAll()
         metadataCache.removeAll()
         metadataLoading.removeAll()
         thumbnails.removeAll()
@@ -164,7 +197,6 @@ final class LibraryModel: ObservableObject {
             // Returning to a folder you are part-way through should not lose your place.
             let restoredIndex = min(max(self.lastPosition[url.path] ?? 0, 0), max(scanned.count - 1, 0))
             self.index = restoredIndex
-            self.zoom = 1
             self.isScanning = false
             // Start on a variant that exists for the first shot.
             self.kind = scanned.first?.defaultKind ?? .jpg
@@ -198,7 +230,6 @@ final class LibraryModel: ObservableObject {
         guard !shots.isEmpty else { return }
         index = min(max(newIndex, 0), shots.count - 1)
         if let folder { lastPosition[folder.path] = index }
-        zoom = 1
         markReviewed()
         // Keep the shown variant valid for the shot we just landed on.
         if currentShot?.url(for: kind) == nil, let fallback = currentShot?.defaultKind {
@@ -236,7 +267,6 @@ final class LibraryModel: ObservableObject {
         guard let shot = currentShot else { return false }
         guard shot.url(for: newKind) != nil else { return false }
         kind = newKind
-        zoom = 1
         prefetchAroundCurrent()
         requestFullResolutionPreview()
         return true
@@ -264,7 +294,7 @@ final class LibraryModel: ObservableObject {
 
     func previewState(for shot: Shot, kind variant: FileKind) -> PreviewState {
         guard shot.url(for: variant) != nil else { return .missingVariant }
-        if previewImage(for: shot, kind: variant) != nil { return .ready }
+        if previewCGImage(for: shot, kind: variant) != nil { return .ready }
         if failedThumbnails.contains(fileKey(shot, variant)) { return .unavailable }
         return .loading
     }
@@ -273,14 +303,27 @@ final class LibraryModel: ObservableObject {
     ///
     /// Full resolution when it has arrived, the prefetch otherwise, so the pane
     /// is filled immediately and then quietly sharpened.
-    func previewImage(for shot: Shot, kind variant: FileKind) -> NSImage? {
-        if let full = detailPreviews[fileKey(shot, variant)] { return full }
-        return thumbnails[cacheKey(shot, variant, Self.prefetchPixel)]
+    func previewCGImage(for shot: Shot, kind variant: FileKind) -> CGImage? {
+        // A rendition is good enough only if it was decoded at least at the
+        // current budget. An older, smaller one is treated as absent so the pane
+        // shows its loading state rather than a soft image — a mosaic of the
+        // photo is far worse than a moment of waiting.
+        let key = fileKey(shot, variant)
+        if let image = previewImages[key], (previewBudgets[key] ?? 0) >= previewPixelBudget {
+            return image
+        }
+        return thumbnails[cacheKey(shot, variant, previewPixelBudget)]?.image
     }
 
-    /// True once the full-resolution decode — not just the prefetch — has landed.
+    /// True once a decode at (or above) the current budget has landed.
+    ///
+    /// Budget-aware on purpose: after the pane changes size the previous decode
+    /// no longer counts, so the callers that wait on this will correctly wait for
+    /// the re-decode.
     func hasFullResolutionPreview(for shot: Shot, kind variant: FileKind) -> Bool {
-        detailPreviews[fileKey(shot, variant)] != nil
+        guard let image = previewImages[fileKey(shot, variant)] else { return false }
+        _ = image
+        return (previewBudgets[fileKey(shot, variant)] ?? 0) >= previewPixelBudget
     }
 
     /// Hand the file to the system so the shot is still reachable when its
@@ -455,12 +498,17 @@ final class LibraryModel: ObservableObject {
     }
 
     /// The small rendition used by the grid.
-    func cachedThumbnail(for shot: Shot, kind variant: FileKind) -> NSImage? {
-        thumbnails[cacheKey(shot, variant, Self.tilePixel)]
+    func cachedThumbnail(for shot: Shot, kind variant: FileKind) -> CGImage? {
+        thumbnails[cacheKey(shot, variant, ThumbnailLoader.tilePixel)]?.image
     }
 
     /// Load the grid rendition if it is not already cached, then publish it.
-    func requestThumbnail(for shot: Shot, kind variant: FileKind, maxPixel: Int = tilePixel) {
+    func requestThumbnail(
+        for shot: Shot,
+        kind variant: FileKind,
+        maxPixel: Int = ThumbnailLoader.tilePixel,
+        urgent: Bool = false
+    ) {
         let key = cacheKey(shot, variant, maxPixel)
         guard thumbnails[key] == nil, !loadingThumbnails.contains(key),
               !failedThumbnails.contains(fileKey(shot, variant)),
@@ -468,7 +516,11 @@ final class LibraryModel: ObservableObject {
 
         loadingThumbnails.insert(key)
         Task {
-            let result = await ThumbnailLoader.shared.thumbnail(for: url, maxPixel: maxPixel)
+            let result = await ThumbnailLoader.shared.thumbnail(
+                for: url,
+                maxPixel: maxPixel,
+                urgent: urgent
+            )
             self.loadingThumbnails.remove(key)
             guard let result else {
                 self.failedThumbnails.insert(fileKey(shot, variant))
@@ -476,26 +528,22 @@ final class LibraryModel: ObservableObject {
             }
             // Never let a coarser rendition overwrite a finer one already cached.
             if let existing = self.thumbnails[key],
-               existing.size.width > result.pixelSize.width / Self.retinaScale {
+               existing.pixelSize.width > result.pixelSize.width {
                 return
             }
-            self.thumbnails[key] = Self.makeImage(from: result)
+            self.thumbnails[key] = result
         }
     }
 
-    /// Wrap a decoded bitmap for display at the correct size.
+    /// Point size at which a bitmap is drawn 1:1 on a 2× display.
     ///
-    /// An `NSImage` built from a `CGImage` is sized in *points*. Setting that to
-    /// the pixel count makes it draw at 1× on a 2× display — every pixel is
-    /// stretched across two device pixels, which is exactly what a soft preview
-    /// looks like. Halving it maps one image pixel onto one device pixel.
-    nonisolated static func makeImage(from thumbnail: Thumbnail) -> NSImage {
-        NSImage(
-            cgImage: thumbnail.image,
-            size: NSSize(
-                width: thumbnail.pixelSize.width / retinaScale,
-                height: thumbnail.pixelSize.height / retinaScale
-            )
+    /// The preview canvas sets a layer's `contents` directly and renders at
+    /// `contentsScale = 1`, so image pixels map to device pixels with no
+    /// resampling. This is used by the grid, which still draws through SwiftUI.
+    nonisolated static func displaySize(for thumbnail: Thumbnail) -> NSSize {
+        NSSize(
+            width: thumbnail.pixelSize.width / retinaScale,
+            height: thumbnail.pixelSize.height / retinaScale
         )
     }
 
@@ -510,55 +558,90 @@ final class LibraryModel: ObservableObject {
     /// full-resolution decode of the shot actually being viewed.
     private func prefetchAroundCurrent() {
         guard !shots.isEmpty else { return }
+        // Neighbours only, at the budget the preview will ask for. The current
+        // shot is deliberately excluded: it has exactly one request path.
+        let budget = previewPixelBudget
         for candidate in [index + 1] where shots.indices.contains(candidate) {
-            let shot = shots[candidate]
-            requestThumbnail(for: shot, kind: kind, maxPixel: Self.prefetchPixel)
+            requestThumbnail(for: shots[candidate], kind: kind, maxPixel: budget, urgent: false)
         }
+    }
+
+    /// Ceiling for the zoom decode. Above this the file is treated as already
+    /// larger than anyone needs to inspect pixel-for-pixel.
+    nonisolated static let zoomPixelCeiling = 8000
+
+    /// Decode the file at its **native** resolution because the user zoomed in.
+    ///
+    /// This is the only way zoom can be genuinely sharp. At 100% each image pixel
+    /// covers one point, which is two device pixels on a Retina screen — so a
+    /// screen-sized preview would be magnified with nothing behind it. Zooming is
+    /// an explicit request to inspect detail, so it is worth the heavier decode;
+    /// it is requested only for the photo on screen, and the cache evicts it
+    /// naturally afterwards.
+    func requestSharperPreviewWhileZoomed(zoomLevel: CGFloat) {
+        guard zoomLevel > 1.05, let shot = currentShot, let url = shot.url(for: kind) else { return }
+
+        // Ask for the file's own pixels. ImageIO returns the native image when
+        // the request exceeds it, so this is exact rather than a guess.
+        let budget = Self.zoomPixelCeiling
+        let key = cacheKey(shot, kind, budget)
+        guard thumbnails[key] == nil, !zoomTasks.contains(key) else { return }
+
+        zoomTasks.insert(key)
+        Task {
+            let result = await ThumbnailLoader.shared.thumbnail(
+                for: url,
+                maxPixel: budget,
+                urgent: false
+            )
+            self.zoomTasks.remove(key)
+            guard let result else { return }
+            if let existing = self.thumbnails[key],
+               existing.pixelSize.width >= result.pixelSize.width {
+                return
+            }
+            self.thumbnails[key] = result
+            // Adopt it as the visible preview so the canvas picks it up.
+            self.previewImages[self.fileKey(shot, kind)] = result.image
+            self.previewBudgets[self.fileKey(shot, kind)] = Self.zoomPixelCeiling
+        }
+    }
+
+    /// Re-decode at the new budget after the pane changes size.
+    func refreshPreviewResolution() {
+        guard let shot = currentShot else { return }
+        previewImages[fileKey(shot, kind)] = nil
+        previewBudgets[fileKey(shot, kind)] = nil
+        prefetchAroundCurrent()
+        requestFullResolutionPreview()
     }
 
     /// Request the sharpest preview for the current shot.
     ///
-    /// Debounced, because holding an arrow key would otherwise start a
-    /// full-resolution decode for every shot passed through. The cheap prefetch
-    /// is already on screen by then, so the pane stays filled while this lands.
+    /// Exactly one request per (photo, variant, budget). Prefetching the current
+    /// shot through a second path used to deadlock: two identical decodes were
+    /// requested at once, the loader coalesced them, and the inner request ended
+    /// up awaiting the outer one — so the pane sat on a loading state forever.
     private func requestFullResolutionPreview() {
         guard let shot = currentShot, let url = shot.url(for: kind) else { return }
         let key = fileKey(shot, kind)
-        guard detailPreviews[key] == nil, detailTasks[key] == nil else { return }
+        let budget = previewPixelBudget
+
+        // Already have this photo at this budget: nothing to do.
+        if previewImages[key] != nil, previewBudgets[key] == budget { return }
+        guard detailTasks[key] == nil else { return }
 
         detailTasks[key] = Task {
-            // Brief coalescing window: enough to skip the shots passed through
-            // while holding an arrow key, short enough to feel immediate. Decode
-            // is only tens of milliseconds, so this is the main source of lag.
-            try? await Task.sleep(nanoseconds: 35_000_000)
-            guard !Task.isCancelled else { return }
-
-            // ImageIO returns the file's own pixels when it is smaller than the
-            // request, so this yields a demosaic-free native decode for ordinary
-            // JPEGs and only downscales genuinely huge images.
-            let result = await ThumbnailLoader.shared.thumbnail(
-                for: url,
-                maxPixel: Self.fullResolutionPixel
-            )
-            guard !Task.isCancelled else { return }
+            let result = await ThumbnailLoader.shared.thumbnail(for: url, maxPixel: budget)
             self.detailTasks[key] = nil
-
             guard let result else {
                 self.failedThumbnails.insert(key)
                 return
             }
-            self.detailPreviews[key] = Self.makeImage(from: result)
+            self.previewImages[key] = result.image
+            self.previewBudgets[key] = budget
+            self.objectWillChange.send()
         }
     }
 
-    /// Long-edge budget for the large preview.
-    ///
-    /// A high ceiling, not a downscale target: ImageIO returns the file's native
-    /// pixels whenever the request exceeds them, so anything at or below this is
-    /// decoded at full resolution.
-    nonisolated static let fullResolutionPixel = 4200
-    /// Instant prefetch shown while the full-resolution pass is in flight.
-    nonisolated static let prefetchPixel = 1400
-    /// Grid tile rendition, matching a 156 pt tile on a 2× display.
-    nonisolated static let tilePixel = 320
 }

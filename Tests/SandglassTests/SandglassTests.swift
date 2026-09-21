@@ -547,7 +547,7 @@ struct PreviewResolutionTests {
         let preview = try #require(
             await ThumbnailLoader.shared.thumbnail(
                 for: url,
-                maxPixel: LibraryModel.fullResolutionPixel
+                maxPixel: ThumbnailLoader.maximumPreviewPixel
             ),
             "preview should decode"
         )
@@ -578,7 +578,7 @@ struct PreviewResolutionTests {
     func previewPreservesColourSpace() async throws {
         let url = fixtureFolder.appendingPathComponent("DSC_0001.JPG")
         let preview = try #require(
-            await ThumbnailLoader.shared.thumbnail(for: url, maxPixel: LibraryModel.fullResolutionPixel)
+            await ThumbnailLoader.shared.thumbnail(for: url, maxPixel: ThumbnailLoader.maximumPreviewPixel)
         )
         // sRGB in, sRGB out: nothing is converted, tinted or filtered.
         let name = preview.image.colorSpace?.name
@@ -607,44 +607,41 @@ struct DisplaySizingTests {
         )
     }
 
-    @Test("A decoded bitmap is displayed at one image pixel per device pixel")
-    func imageSizeMatchesDisplayScale() {
-        // The regression this guards: sizing an NSImage by its pixel count makes
-        // it draw at 1x on a 2x display, stretching every pixel across two device
+    @Test("Bitmaps are drawn at one image pixel per device pixel")
+    func displaySizeMatchesScale() {
+        // The regression this guards: sizing an image by its pixel count makes it
+        // draw at 1x on a 2x display, stretching every pixel across two device
         // pixels — which is exactly what a blurred preview looks like.
         let thumbnail = makeThumbnail(width: 1600, height: 1067)
-        let image = LibraryModel.makeImage(from: thumbnail)
+        let size = LibraryModel.displaySize(for: thumbnail)
 
-        #expect(image.size.width == 1600 / LibraryModel.retinaScale)
-        #expect(image.size.height == 1067 / LibraryModel.retinaScale)
-
+        #expect(size.width == 1600 / LibraryModel.retinaScale)
+        #expect(size.height == 1067 / LibraryModel.retinaScale)
         // The bitmap itself must stay at full pixel resolution.
-        let rep = image.representations.first
-        #expect(rep?.pixelsWide == 1600)
-        #expect(rep?.pixelsHigh == 1067)
+        #expect(thumbnail.image.width == 1600)
+        #expect(thumbnail.image.height == 1067)
     }
 
     @Test("Point size is always half the pixel size at 2x")
     func pointSizeIsHalfPixelSize() {
         #expect(LibraryModel.retinaScale == 2)
         for side in [320, 1400, 4200] {
-            let image = LibraryModel.makeImage(from: makeThumbnail(width: side, height: side))
-            #expect(image.size.width == CGFloat(side) / 2)
+            let size = LibraryModel.displaySize(for: makeThumbnail(width: side, height: side))
+            #expect(size.width == CGFloat(side) / 2)
         }
     }
 
-    @Test("The rendered image always has at least the pixels it is drawn into")
-    func sufficientPixelsForRetinaPane() {
-        // A typical pane is about 800x700 points; at 2x that needs 1600x1400 px.
+    @Test("Budgets cover a Retina pane without over-decoding")
+    func budgetsAreSensible() {
         let panePoints = CGSize(width: 800, height: 700)
         let needed = max(panePoints.width, panePoints.height) * LibraryModel.retinaScale
 
         #expect(
-            CGFloat(LibraryModel.fullResolutionPixel) >= needed,
+            CGFloat(ThumbnailLoader.maximumPreviewPixel) >= needed,
             "full-resolution budget must cover a Retina pane"
         )
-        #expect(LibraryModel.tilePixel >= 156 * Int(LibraryModel.retinaScale))
-        #expect(LibraryModel.prefetchPixel < LibraryModel.fullResolutionPixel)
+        #expect(ThumbnailLoader.tilePixel >= 156 * Int(LibraryModel.retinaScale))
+        #expect(ThumbnailLoader.prefetchPixel < ThumbnailLoader.maximumPreviewPixel)
     }
 }
 
@@ -693,12 +690,12 @@ struct PreviewPipelineTests {
 
         // Ask for the grid tile first, exactly as the filmstrip does, then wait
         // for the tile to land before looking at the preview pane.
-        model.requestThumbnail(for: shot, kind: .jpg, maxPixel: LibraryModel.tilePixel)
+        model.requestThumbnail(for: shot, kind: .jpg, maxPixel: ThumbnailLoader.tilePixel)
         _ = await waitUntil { model.cachedThumbnail(for: shot, kind: .jpg) != nil }
 
         let tile = try #require(model.cachedThumbnail(for: shot, kind: .jpg))
-        #expect(tile.size.width <= CGFloat(LibraryModel.tilePixel) / LibraryModel.retinaScale + 1,
-                "grid tile should be small, got \(tile.size)")
+        #expect(tile.width <= ThumbnailLoader.tilePixel,
+                "grid tile should be small, got \(tile.width)px")
 
         // Now the preview must be able to reach full resolution regardless.
         let becameSharp = await waitUntil {
@@ -706,13 +703,13 @@ struct PreviewPipelineTests {
         }
         #expect(becameSharp, "the preview should still reach full resolution after a tile was cached")
 
-        let preview = try #require(model.previewImage(for: shot, kind: .jpg))
+        let preview = try #require(model.previewCGImage(for: shot, kind: .jpg))
         #expect(
-            preview.size.width > tile.size.width,
-            "preview (\(preview.size)) must be sharper than the tile (\(tile.size))"
+            preview.width > tile.width,
+            "preview (\(preview.width)px) must be sharper than the tile (\(tile.width)px)"
         )
-        // 1600px source at 2x display scale -> 800 points wide.
-        #expect(preview.size.width == 800, "expected native 1600px at 2x, got \(preview.size)")
+        // The source is 1600px, so the preview must be at native resolution.
+        #expect(preview.width == 1600, "expected native 1600px, got \(preview.width)px")
     }
 
     @Test("Metadata is read on demand and then cached")
@@ -732,6 +729,28 @@ struct PreviewPipelineTests {
         #expect(model.isLoadingMetadata(for: shot, kind: .jpg) == false, "loading flag should clear")
     }
 
+    @Test("The decode budget follows the pane size instead of being fixed")
+    func budgetTracksCanvas() {
+        let model = LibraryModel()
+
+        // Default canvas: roughly the shipping window's preview pane.
+        let initial = model.previewPixelBudget
+
+        // A big window should ask for more pixels...
+        model.reportCanvasSize(CGSize(width: 1100, height: 900))
+        let enlarged = model.previewPixelBudget
+        #expect(enlarged > initial, "a larger pane should decode more pixels")
+
+        // ...and a small one should stop paying for them.
+        model.reportCanvasSize(CGSize(width: 400, height: 300))
+        let shrunk = model.previewPixelBudget
+        #expect(shrunk < initial, "a smaller pane should decode fewer pixels")
+
+        // Always enough for the pane at 2x, never past the ceiling.
+        #expect(shrunk >= 1024)
+        #expect(enlarged <= ThumbnailLoader.maximumPreviewPixel)
+    }
+
     @Test("Switching variant re-resolves the preview for that file")
     func switchingVariantChangesPreview() async throws {
         let model = try await loadedModel()
@@ -745,7 +764,179 @@ struct PreviewPipelineTests {
         model.setKind(.nef)
         #expect(model.kind == .nef)
         // A different file means a different cache entry, not the JPG's image.
-        #expect(model.previewImage(for: paired, kind: .nef) == nil || model.hasFullResolutionPreview(for: paired, kind: .nef) == false,
-                "the NEF must not be served the JPG's cached preview")
+        #expect(
+            model.previewCGImage(for: paired, kind: .nef) == nil
+                || model.hasFullResolutionPreview(for: paired, kind: .nef) == false,
+            "the NEF must not be served the JPG's cached preview"
+        )
+    }
+}
+
+// MARK: - Rendered sharpness
+
+@Suite("Rendered sharpness")
+@MainActor
+struct RenderedSharpnessTests {
+
+    /// A checkerboard with a known cell size: exact, countable detail.
+    private func checkerboard(side: Int, cell: Int) -> CGImage {
+        let context = CGContext(
+            data: nil, width: side, height: side,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        for y in stride(from: 0, to: side, by: cell) {
+            for x in stride(from: 0, to: side, by: cell) {
+                let on = ((x / cell) + (y / cell)) % 2 == 0
+                context.setFillColor(gray: on ? 1 : 0, alpha: 1)
+                context.fill(CGRect(x: x, y: y, width: cell, height: cell))
+            }
+        }
+        return context.makeImage()!
+    }
+
+    private struct Render {
+        let grey: [UInt8]
+        let width: Int
+        let height: Int
+    }
+
+    /// Render the canvas through its layer tree, which is what reaches the screen.
+    ///
+    /// `cacheDisplay(in:to:)` is deliberately avoided: it re-rasterises the view
+    /// and smooths the result, so it cannot answer a question about sharpness.
+    ///
+    /// Note the vertical flip: `CALayer.render(in:)` draws in unflipped layer
+    /// coordinates, so row 0 of the output is the *bottom* of the view.
+    private func render(_ canvas: ImageCanvasView, size: CGSize) -> Render? {
+        canvas.frame = CGRect(origin: .zero, size: size)
+        canvas.layout()
+        let width = Int(size.width)
+        let height = Int(size.height)
+        guard let context = CGContext(
+            data: nil, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+        context.interpolationQuality = .none
+        canvas.layer?.render(in: context)
+        guard let image = context.makeImage() else { return nil }
+
+        var pixels = [UInt8](repeating: 0, count: width * height)
+        guard let grey = CGContext(
+            data: &pixels, width: width, height: height,
+            bitsPerComponent: 8, bytesPerRow: width,
+            space: CGColorSpaceCreateDeviceGray(),
+            bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { return nil }
+        grey.interpolationQuality = .none
+        grey.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return Render(grey: pixels, width: width, height: height)
+    }
+
+    /// Lengths of the alternating runs along one row.
+    private func runs(_ render: Render, row: Int) -> [Int] {
+        var lengths: [Int] = []
+        var current = render.grey[row * render.width] > 127
+        var length = 1
+        for x in 1..<render.width {
+            let on = render.grey[row * render.width + x] > 127
+            if on == current { length += 1 } else { lengths.append(length); current = on; length = 1 }
+        }
+        lengths.append(length)
+        return lengths
+    }
+
+    /// Pixels that are neither black nor white — the signature of smoothing.
+    private func intermediatePixels(_ render: Render) -> Int {
+        render.grey.filter { $0 > 40 && $0 < 215 }.count
+    }
+
+    @Test("Zoom magnifies real pixels: cell size scales exactly, with no smoothing")
+    func zoomIsPixelExact() throws {
+        let cell = 3
+        let side = 300
+        let canvas = ImageCanvasView()
+        // Same size as the pane, so the fit scale is exactly 1 and any softening
+        // would have to come from the zoom path itself.
+        canvas.setImage(checkerboard(side: side, cell: cell), resetZoom: true)
+
+        for zoom in [1, 2, 3, 4] {
+            canvas.setZoomFromUI(CGFloat(zoom))
+            let output = try #require(render(canvas, size: CGSize(width: side, height: side)))
+            let row = side / 2
+
+            #expect(
+                intermediatePixels(output) == 0,
+                "zoom \(zoom)x produced softened pixels — the bitmap is being interpolated"
+            )
+
+            // Interior runs must all be exactly cell * zoom wide.
+            let interior = runs(output, row: row).dropFirst().dropLast()
+            let expected = cell * zoom
+            let wrong = interior.filter { $0 != expected }
+            #expect(
+                wrong.isEmpty,
+                "zoom \(zoom)x: expected \(expected)px runs, found \(Array(interior.prefix(6)))"
+            )
+        }
+    }
+
+    @Test("Fitting a photo to the pane keeps its aspect ratio and fills the frame")
+    func aspectFitPreserved() throws {
+        // A 4:1 image in a square pane must letterbox, leaving the top empty.
+        let context = CGContext(
+            data: nil, width: 400, height: 100,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 400, height: 100))
+
+        let canvas = ImageCanvasView()
+        canvas.setImage(context.makeImage()!, resetZoom: true)
+        let output = try #require(render(canvas, size: CGSize(width: 300, height: 300)))
+
+        // Rows well away from the centre band are letterbox: uniformly black.
+        // (Row 0 is the bottom in layer coordinates; the band is centred either way.)
+        let topRow = (0..<output.width).map { output.grey[10 * output.width + $0] }
+        #expect(topRow.allSatisfy { $0 < 20 }, "a 4:1 photo should letterbox in a square pane")
+
+        // Middle rows: the photo itself, uniformly white.
+        let midRow = (0..<output.width).map { output.grey[150 * output.width + $0] }
+        #expect(midRow.allSatisfy { $0 > 235 }, "the photo should fill the middle band")
+    }
+
+    @Test("Panning is limited so the photo can never be dragged out of view")
+    func panLimitsKeepPhotoVisible() throws {
+        let side = 400
+        let context = CGContext(
+            data: nil, width: side, height: side,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+
+        let canvas = ImageCanvasView()
+        canvas.setImage(context.makeImage()!, resetZoom: true)
+        canvas.frame = CGRect(x: 0, y: 0, width: side, height: side)
+        canvas.layout()
+
+        // At fit there is nothing to pan: the photo exactly fills the pane.
+        var limit = canvas.panLimit()
+        #expect(limit.x == 0 && limit.y == 0, "no slack at fit")
+        #expect(canvas.zoom == 1)
+
+        // At 2x there is exactly one pane-width of slack in each direction, so
+        // an edge can be brought to the middle but no further.
+        canvas.setZoomFromUI(2)
+        limit = canvas.panLimit()
+        #expect(abs(limit.x - CGFloat(side) / 2) <= 1, "expected half a pane of slack, got \(limit.x)")
+        #expect(abs(limit.y - CGFloat(side) / 2) <= 1, "expected half a pane of slack, got \(limit.y)")
     }
 }

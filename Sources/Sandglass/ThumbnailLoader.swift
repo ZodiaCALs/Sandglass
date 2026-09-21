@@ -40,16 +40,30 @@ actor ThumbnailLoader {
 
     // MARK: Public API
 
-    /// Load a preview for `url`, honouring `maxPixel` on the long edge.
-    func thumbnail(for url: URL, maxPixel: Int) async -> Thumbnail? {
-        await thumbnails(for: [(url: url, maxPixel: maxPixel)]).first ?? nil
+    /// Instant prefetch shown while the sharp pass is in flight.
+    nonisolated static let prefetchPixel = 1400
+    /// Grid tile rendition, matching a 156 pt tile on a 2× display.
+    nonisolated static let tilePixel = 320
+    /// Upper bound for any preview request.
+    nonisolated static let maximumPreviewPixel = 4200
+
+    /// Load a preview for `url`.
+    ///
+    /// Urgent by default: a single-file request comes from the preview pane, and
+    /// must never queue behind the filmstrip's tiles.
+    func thumbnail(for url: URL, maxPixel: Int, urgent: Bool = true) async -> Thumbnail? {
+        await load(url: url, maxPixel: maxPixel, urgent: urgent)
     }
 
-    /// Load several previews in one pass.
+    /// Load several previews in one pass, returning them in request order.
     ///
-    /// A task group bounds how many decodes run at once instead of serialising
-    /// them, and results come back in request order.
-    func thumbnails(for requests: [(url: URL, maxPixel: Int)]) async -> [Thumbnail?] {
+    /// `urgent` requests run as independent high-priority tasks. Grid tiles go
+    /// through a lower-priority task group, so hundreds of them can never starve
+    /// the photo actually on screen.
+    func thumbnails(
+        for requests: [(url: URL, maxPixel: Int)],
+        urgent: Bool = false
+    ) async -> [Thumbnail?] {
         var results = [Thumbnail?](repeating: nil, count: requests.count)
         var pending: [(key: Key, url: URL, maxPixel: Int)] = []
         var pendingIndices: [Int] = []
@@ -60,7 +74,7 @@ actor ThumbnailLoader {
             if let hit = cache[key] {
                 touch(key)
                 results[index] = hit
-            } else if let running = inFlight[key] {
+            } else if let running = inFlight[key], !urgent {
                 results[index] = await running.value
             } else {
                 pending.append((key, request.url, request.maxPixel))
@@ -70,24 +84,54 @@ actor ThumbnailLoader {
 
         guard !pending.isEmpty else { return results }
 
+        let priority: TaskPriority = urgent ? .userInitiated : .utility
         let decoded = await withTaskGroup(
             of: (offset: Int, thumbnail: Thumbnail?).self,
             returning: [(offset: Int, thumbnail: Thumbnail?)].self
         ) { group in
             for (offset, item) in pending.enumerated() {
-                group.addTask { (offset, Self.decode(url: item.url, maxPixel: item.maxPixel)) }
+                group.addTask(priority: priority) {
+                    (offset, await self.load(url: item.url, maxPixel: item.maxPixel, urgent: urgent))
+                }
             }
             var collected: [(offset: Int, thumbnail: Thumbnail?)] = []
             for await value in group { collected.append(value) }
             return collected
         }
 
-        for (offset, thumbnail) in decoded {
-            guard let thumbnail, pending.indices.contains(offset) else { continue }
-            store(pending[offset].key, thumbnail)
+        for (offset, thumbnail) in decoded where pending.indices.contains(offset) {
             results[pendingIndices[offset]] = thumbnail
         }
         return results
+    }
+
+    /// Decode one image, coalescing duplicate work.
+    ///
+    /// Urgent requests get their own high-priority task rather than joining a
+    /// shared group, which is what keeps the preview responsive while the grid is
+    /// still filling in.
+    private func load(url: URL, maxPixel: Int, urgent: Bool) async -> Thumbnail? {
+        let key = Key(path: url.path, maxPixel: maxPixel)
+
+        if let hit = cache[key] {
+            touch(key)
+            return hit
+        }
+        if let running = inFlight[key] {
+            return await running.value
+        }
+
+        let task = Task<Thumbnail?, Never>(priority: urgent ? .userInitiated : .utility) {
+            Self.decode(url: url, maxPixel: maxPixel)
+        }
+        inFlight[key] = task
+
+        let result = await task.value
+        inFlight[key] = nil
+        if let result {
+            store(key, result)
+        }
+        return result
     }
 
     /// Drop everything — used when the user opens a different folder.

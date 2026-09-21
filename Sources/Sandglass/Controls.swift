@@ -251,36 +251,41 @@ struct NavigationControls: View {
 
 /// Zoom slider plus a percentage readout that resets on click.
 struct ZoomControls: View {
-    @ObservedObject var model: LibraryModel
+    @ObservedObject var zoom: ZoomBridge
 
-    private let range: ClosedRange<Double> = LibraryModel.minZoom...LibraryModel.maxZoom
+    private let range: ClosedRange<CGFloat> = LibraryModel.minZoom...LibraryModel.maxZoom
 
     var body: some View {
         HStack(spacing: 8) {
             GlassIconButton(systemName: "minus.magnifyingglass", help: "Zoom out  (−)", size: 30) {
-                model.zoom = max(model.zoom / 1.25, range.lowerBound)
+                zoom.setFromUI(max(zoom.level / 1.25, range.lowerBound))
             }
 
-            Slider(value: $model.zoom, in: range)
-                .controlSize(.mini)
-                .frame(width: 92)
-                .help("Zoom the preview")
+            // The slider only *sends* zoom; the canvas reports the live value back,
+            // so a gesture and the slider never fight each other.
+            Slider(
+                value: Binding(get: { zoom.level }, set: { zoom.setFromUI($0) }),
+                in: range
+            )
+            .controlSize(.mini)
+            .frame(width: 92)
+            .help("Zoom the preview  (pinch or ⌘-scroll on the photo)")
 
             Button {
-                model.zoom = 1
+                zoom.setFromUI(range.lowerBound)
             } label: {
-                Text("\(Int((model.zoom * 100).rounded()))%")
+                Text("\(Int((zoom.level * 100).rounded()))%")
                     .font(.system(size: 10.5, weight: .semibold, design: .rounded))
                     .monospacedDigit()
                     .frame(width: 40)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(model.zoom > 1.001 ? Color.primary : Color.secondary)
+            .foregroundStyle(zoom.level > 1.001 ? Color.primary : Color.secondary)
             .help("Reset zoom to 100%  (0)")
 
             GlassIconButton(systemName: "plus.magnifyingglass", help: "Zoom in  (+)", size: 30) {
-                model.zoom = min(model.zoom * 1.25, range.upperBound)
+                zoom.setFromUI(min(zoom.level * 1.25, range.upperBound))
             }
         }
         .frame(width: 232, alignment: .trailing)
@@ -290,6 +295,7 @@ struct ZoomControls: View {
 /// The floating bottom bar that drives the whole culling loop.
 struct ControlBar: View {
     @ObservedObject var model: LibraryModel
+    @ObservedObject var zoom: ZoomBridge
     @Binding var showingExportSheet: Bool
     @Binding var showingMetadata: Bool
     var onMessage: (String, String) -> Void
@@ -324,7 +330,7 @@ struct ControlBar: View {
                 showingMetadata.toggle()
             }
 
-            ZoomControls(model: model)
+            ZoomControls(zoom: zoom)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)

@@ -7,20 +7,52 @@ struct Toast: Equatable, Identifiable {
     let systemName: String
 }
 
-/// Renders the currently selected shot at the requested zoom level.
+/// Shared state for the zoom controls.
+///
+/// The canvas owns the zoom while a gesture is running — driving it from SwiftUI
+/// state is what made zooming lag. SwiftUI only *reads* the value and sends
+/// deliberate changes (slider, buttons, keyboard) back through here.
+@MainActor
+final class ZoomBridge: ObservableObject {
+    @Published var level: CGFloat = 1
+    weak var canvas: ImageCanvasView?
+
+    func setFromUI(_ value: CGFloat) {
+        canvas?.setZoomFromUI(value)
+    }
+
+    func report(_ value: CGFloat) {
+        if abs(level - value) > 0.001 { level = value }
+    }
+
+    /// Remember the live canvas so controls can drive it directly. Weak: the
+    /// view hierarchy owns it.
+    func attach(canvas: ImageCanvasView) {
+        self.canvas = canvas
+    }
+}
+
+/// Renders the selected shot at native resolution with live zoom and pan.
 struct PreviewPane: View {
     @ObservedObject var model: LibraryModel
+    @ObservedObject var zoom: ZoomBridge
     @Binding var toast: Toast?
 
-    @State private var zoomAnchor: UnitPoint = .center
-    @State private var lastMagnification: CGFloat = 1
+    /// Which part of the photo is on screen, in normalised image coordinates.
+    @State private var visibleRegion = CGRect(x: 0, y: 0, width: 1, height: 1)
+
+    /// Above this the photo no longer fits the pane, so the navigator is useful.
+    private static let navigatorThreshold: CGFloat = 1.01
+    private var isZoomedIn: Bool { zoom.level > Self.navigatorThreshold }
 
     private var shot: Shot? { model.currentShot }
-    /// Full resolution when it has arrived, the instant prefetch before that.
-    private var image: NSImage? {
+
+    /// The decoded bitmap for the current file, if it has arrived.
+    private var image: CGImage? {
         guard let shot else { return nil }
-        return model.previewImage(for: shot, kind: model.kind)
+        return model.previewCGImage(for: shot, kind: model.kind)
     }
+
     private var isFullResolution: Bool {
         guard let shot else { return false }
         return model.hasFullResolutionPreview(for: shot, kind: model.kind)
@@ -29,23 +61,9 @@ struct PreviewPane: View {
     var body: some View {
         ZStack {
             if let shot {
-                GeometryReader { proxy in
-                    switch model.previewState(for: shot, kind: model.kind) {
-                    case .ready:
-                        if let image {
-                            imageView(image, in: proxy.size)
-                        } else {
-                            loadingPlaceholder(in: proxy.size)
-                        }
-                    case .loading:
-                        loadingPlaceholder(in: proxy.size)
-                    case .unavailable:
-                        unavailable(shot, in: proxy.size)
-                    case .missingVariant:
-                        missingVariant(shot, in: proxy.size)
-                    }
-                }
-                .overlay(alignment: .topLeading) { overlays(for: shot) }
+                stage(for: shot)
+                    .overlay(alignment: .topLeading) { overlays(for: shot) }
+                    .overlay(alignment: .bottomTrailing) { navigator }
             } else {
                 EmptyStage()
             }
@@ -68,59 +86,74 @@ struct PreviewPane: View {
             }
         }
         .animation(.easeOut(duration: 0.2), value: isFullResolution)
+        .animation(.easeOut(duration: 0.18), value: isZoomedIn)
         .padding(10)
     }
 
-    // MARK: Image
-
+    /// Shown only while zoomed in, where knowing your position actually matters.
     @ViewBuilder
-    private func imageView(_ image: NSImage, in size: CGSize) -> some View {
-        let level = model.zoom
-
-        if level <= 1.001 {
-            fitted(image, in: size)
-        } else {
-            GeometryReader { proxy in
-                ScrollView([.horizontal, .vertical]) {
-                    fitted(image, in: size)
-                        .scaleEffect(level, anchor: zoomAnchor)
-                        .frame(width: size.width, height: size.height)
-                }
-                .scrollIndicators(.never)
-                .frame(width: proxy.size.width, height: proxy.size.height)
+    private var navigator: some View {
+        if isZoomedIn, let image {
+            NavigatorView(image: image, region: visibleRegion) { point in
+                zoom.canvas?.centreOn(normalised: point)
             }
+            .padding(14)
+            .transition(.opacity.combined(with: .scale(scale: 0.94, anchor: .bottomTrailing)))
         }
     }
 
-    private func fitted(_ image: NSImage, in size: CGSize) -> some View {
-        Image(nsImage: image)
-            .resizable()
-            // Smooth scaling on the rare occasion the photo is larger than the
-            // pane. No tint, saturation, blend or colour effect is applied, so
-            // the pixels you see are the pixels in the file.
-            .interpolation(.high)
-            .antialiased(true)
-            .aspectRatio(contentMode: .fit)
-            .frame(width: size.width, height: size.height)
-            .shadow(color: .black.opacity(0.28), radius: 18, y: 6)
-            .gesture(
-                MagnificationGesture()
-                    .onChanged { value in
-                        model.zoom = min(max(Double(value) * lastMagnification, LibraryModel.minZoom), LibraryModel.maxZoom)
-                    }
-                    .onEnded { _ in lastMagnification = CGFloat(model.zoom) }
-            )
-            .onContinuousHover { phase in
-                if case .active(let point) = phase, size.width > 0, size.height > 0 {
-                    zoomAnchor = UnitPoint(
-                        x: min(max(point.x / size.width, 0), 1),
-                        y: min(max(point.y / size.height, 0), 1)
-                    )
-                }
-            }
+    /// The image surface. Zoom and pan happen entirely inside this layer-backed
+    /// view, so the compositor handles them instead of SwiftUI's layout pass.
+    @ViewBuilder
+    private func stage(for shot: Shot) -> some View {
+        switch model.previewState(for: shot, kind: model.kind) {
+        case .ready:
+            canvas
+        case .loading:
+            loadingPlaceholder
+        case .unavailable:
+            unavailable(shot)
+        case .missingVariant:
+            missingVariant(shot)
+        }
     }
 
-    private func loadingPlaceholder(in size: CGSize) -> some View {
+    private var canvas: some View {
+        ImageCanvas(
+            image: image,
+            resetToken: "\(shot?.id ?? "")|\(model.kind.rawValue)",
+            onZoomChange: { level in
+                zoom.report(level)
+                // Reveal more detail only once the user actually zooms in.
+                model.requestSharperPreviewWhileZoomed(zoomLevel: level)
+            },
+            onViewportChange: { region in
+                // Only publish meaningful movement, so scrolling does not
+                // re-render SwiftUI on every frame.
+                if abs(region.minX - visibleRegion.minX) > 0.002
+                    || abs(region.minY - visibleRegion.minY) > 0.002
+                    || abs(region.width - visibleRegion.width) > 0.002 {
+                    visibleRegion = region
+                }
+            },
+            onCanvasReady: { canvas in
+                zoom.attach(canvas: canvas)
+            }
+        )
+        .background(Color.black.opacity(0.18))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // The model sizes its decodes from the real pane, so a big window gets
+        // more pixels and a small one stops paying for them.
+        .onGeometryChange(for: CGSize.self) { proxy in
+            proxy.size
+        } action: { size in
+            model.reportCanvasSize(size)
+        }
+    }
+
+    // MARK: States
+
+    private var loadingPlaceholder: some View {
         VStack(spacing: 12) {
             ProgressView()
                 .controlSize(.small)
@@ -128,12 +161,12 @@ struct PreviewPane: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
         }
-        .frame(width: size.width, height: size.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Some raw files carry no preview this system can decode. Be explicit about
     /// it and offer a way to still look at the file.
-    private func unavailable(_ shot: Shot, in size: CGSize) -> some View {
+    private func unavailable(_ shot: Shot) -> some View {
         VStack(spacing: 12) {
             Image(systemName: "eye.slash")
                 .font(.system(size: 28, weight: .light))
@@ -155,10 +188,10 @@ struct PreviewPane: View {
             .buttonStyle(.glass)
         }
         .padding(24)
-        .frame(width: size.width, height: size.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private func missingVariant(_ shot: Shot, in size: CGSize) -> some View {
+    private func missingVariant(_ shot: Shot) -> some View {
         VStack(spacing: 10) {
             Image(systemName: "questionmark.folder")
                 .font(.system(size: 26, weight: .light))
@@ -173,11 +206,11 @@ struct PreviewPane: View {
                 .font(.system(size: 11, weight: .medium))
             }
         }
-        .frame(width: size.width, height: size.height)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
     /// Shown while the full-resolution decode is still in flight, so it is clear
-    /// that the slightly softer prefetch image is temporary.
+    /// that the softer prefetch image is temporary.
     private var sharpeningIndicator: some View {
         HStack(spacing: 5) {
             ProgressView().controlSize(.mini)
@@ -221,6 +254,7 @@ struct PreviewPane: View {
             }
         }
         .padding(16)
+        .allowsHitTesting(false)
     }
 
     private func toastView(_ toast: Toast) -> some View {
@@ -229,6 +263,7 @@ struct PreviewPane: View {
             .padding(.horizontal, 13)
             .padding(.vertical, 7)
             .glassChip(tint: .orange)
+            .allowsHitTesting(false)
     }
 }
 

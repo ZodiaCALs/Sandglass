@@ -9,6 +9,7 @@ struct RootView: View {
     @State private var showingHelp = false
     @State private var toastToken = UUID()
     @State private var showingBackgroundPicker = false
+    @StateObject private var zoom = ZoomBridge()
     @State private var showingMetadata = false
 
     // Backdrop preferences, persisted across launches.
@@ -53,6 +54,7 @@ struct RootView: View {
                 content
                 ControlBar(
                     model: model,
+                    zoom: zoom,
                     showingExportSheet: $showingExportSheet,
                     showingMetadata: $showingMetadata
                 ) { message, symbol in
@@ -135,7 +137,7 @@ struct RootView: View {
         } else {
             HStack(spacing: 0) {
                 PhotoGridView(model: model)
-                PreviewPane(model: model, toast: $toast)
+                PreviewPane(model: model, zoom: zoom, toast: $toast)
                 if showingMetadata {
                     MetadataPanel(model: model) {
                         showingMetadata = false
@@ -216,11 +218,11 @@ struct RootView: View {
         case .background:
             showingBackgroundPicker.toggle()
         case .zoomIn:
-            model.zoom = min(model.zoom * 1.25, LibraryModel.maxZoom)
+            zoom.setFromUI(min(zoom.level * 1.25, LibraryModel.maxZoom))
         case .zoomOut:
-            model.zoom = max(model.zoom / 1.25, LibraryModel.minZoom)
+            zoom.setFromUI(max(zoom.level / 1.25, LibraryModel.minZoom))
         case .zoomReset:
-            model.zoom = 1
+            zoom.setFromUI(LibraryModel.minZoom)
         }
     }
 

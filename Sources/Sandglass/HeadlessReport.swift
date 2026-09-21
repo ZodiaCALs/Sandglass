@@ -9,6 +9,145 @@ import ImageIO
 /// a real photo folder.
 enum HeadlessReport {
 
+    /// Measure the flow a user actually experiences: open a folder, then step
+    /// through photos, timing how long each preview takes at the real budget.
+    ///
+    /// Invoked with `Sandglass --flow <folder>`.
+    @MainActor
+    static func flow(folder: URL) -> Never {
+        setvbuf(stdout, nil, _IONBF, 0)
+
+        let scanStart = Date()
+        let shots: [Shot]
+        do {
+            shots = try FolderScanner.scan(folder: folder)
+        } catch {
+            print("FAIL: \(error.localizedDescription)")
+            exit(1)
+        }
+        let scanMS = Date().timeIntervalSince(scanStart) * 1000
+
+        print("Folder:  \(folder.path)")
+        print("Shots:   \(shots.count)")
+        print(String(format: "Scan:    %.0f ms", scanMS))
+
+        let model = LibraryModel()
+        model.openFolder(at: folder)
+        let deadline = Date().addingTimeInterval(120)
+        while model.isScanning && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+        print(String(format: "Open:    %.0f ms  (scan + first preview)", Date().timeIntervalSince(scanStart) * 1000))
+        print("Budget:  \(model.previewPixelBudget) px  (adaptive to the pane)")
+        print("")
+        print(pad("PHOTO", 20) + pad("VARIANT", 9) + pad("PIXELS", 13) + "PREVIEW MS")
+
+        var total = 0.0
+        var slowest = 0.0
+        var samples = 0
+
+        for (position, shot) in shots.enumerated() {
+            model.go(to: position)
+            let start = Date()
+            var decoded = false
+            while Date().timeIntervalSince(start) < 15 {
+                if model.hasFullResolutionPreview(for: shot, kind: model.kind) {
+                    decoded = true
+                    break
+                }
+                RunLoop.main.run(until: Date().addingTimeInterval(0.005))
+            }
+            let ms = Date().timeIntervalSince(start) * 1000
+            guard decoded else {
+                print(pad(shot.baseName, 20) + pad(model.kind.label, 9) + pad("-", 13) + "no preview")
+                continue
+            }
+            let image = model.previewCGImage(for: shot, kind: model.kind)
+            let pixels = image.map { "\($0.width)x\($0.height)" } ?? "?"
+            print(pad(shot.baseName, 20) + pad(model.kind.label, 9) + pad(pixels, 13)
+                  + String(format: "%.0f", ms))
+            total += ms
+            slowest = max(slowest, ms)
+            samples += 1
+        }
+
+        print("")
+        if samples > 0 {
+            print(String(format: "Average preview: %.0f ms   slowest: %.0f ms   (%d photos)",
+                         total / Double(samples), slowest, samples))
+        }
+        print("PASS")
+        exit(0)
+    }
+
+    /// Report exactly what the preview pane would draw, and at what size.
+    ///
+    /// Invoked with `Sandglass --inspect <folder>`. This answers "is the pane
+    /// being handed a low-resolution bitmap?" with facts rather than guesswork.
+    @MainActor
+    static func inspect(folder: URL) -> Never {
+        setvbuf(stdout, nil, _IONBF, 0)
+
+        let model = LibraryModel()
+        model.openFolder(at: folder)
+        let deadline = Date().addingTimeInterval(60)
+        while model.isScanning && Date() < deadline {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+
+        guard !model.shots.isEmpty else {
+            print("FAIL: no shots in \(folder.path)")
+            exit(1)
+        }
+
+        print("Budget reported by the model: \(model.previewPixelBudget) px")
+        print("")
+        print(pad("SHOT", 18) + pad("NATIVE", 12) + pad("DRAWN", 12) + "COVERAGE")
+
+        // Let the async preview work settle, the way it would while the user looks.
+        for _ in 0..<200 { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
+
+        var blocky = 0
+        for (position, shot) in model.shots.prefix(6).enumerated() {
+            model.go(to: position)
+            var waited = 0
+            while !model.hasFullResolutionPreview(for: shot, kind: model.kind) && waited < 400 {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+                waited += 1
+            }
+
+            guard let drawn = model.previewCGImage(for: shot, kind: model.kind) else {
+                print(pad(shot.baseName, 18) + pad("-", 12) + pad("nil", 12) + "no preview")
+                blocky += 1
+                continue
+            }
+
+            // Native size of the file on disk.
+            var native = "-"
+            if let url = shot.url(for: model.kind),
+               let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+               let w = props[kCGImagePropertyPixelWidth] as? Int,
+               let h = props[kCGImagePropertyPixelHeight] as? Int {
+                native = "\(w)x\(h)"
+                // A preview much smaller than the pane needs is what looks blocky.
+                let needed = model.previewPixelBudget
+                if max(drawn.width, drawn.height) < needed / 2 {
+                    blocky += 1
+                }
+            }
+
+            let coverage = native == "-" ? "" : "\(drawn.width)x\(drawn.height)"
+            print(pad(shot.baseName, 18) + pad(native, 12) + pad(coverage, 12)
+                  + (max(drawn.width, drawn.height) < model.previewPixelBudget / 2 ? "TOO SMALL" : "ok"))
+        }
+
+        print("")
+        print(blocky == 0 ? "PASS: every preview is at the requested resolution"
+                          : "FAIL: \(blocky) preview(s) below half the budget")
+        exit(blocky == 0 ? 0 : 1)
+    }
+
     /// Measure cold decode cost at each size the app actually requests.
     ///
     /// Invoked with `Sandglass --bench <folder>`. Useful for checking that a

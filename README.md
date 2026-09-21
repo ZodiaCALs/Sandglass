@@ -98,6 +98,13 @@ dist/Sandglass.app/Contents/MacOS/Sandglass ~/Pictures/Wedding
 | `B` | Flag both JPG and NEF |
 | `1` / `2` | Flag only the JPG / only the NEF |
 | `+` `−` `0` | Zoom in / out / reset |
+| Pinch, or ⌘-scroll | Zoom about the cursor |
+| Two-finger scroll / drag | Pan while zoomed in |
+| Double-click | Toggle fit ↔ 2× |
+
+When you zoom in, a **navigator** appears in the bottom-right corner: the whole
+photo with a rectangle marking the part on screen. Click or drag inside it to move
+around; it hides again at fit.
 | `M` | Show or hide the file info panel |
 | `⌘O` | Open a folder |
 | `⌘E` | Export flagged photos |
@@ -168,7 +175,9 @@ Sources/Sandglass/
   RootView.swift          layout, commands, help sheet
   HeaderBar.swift         title, folder picker, progress, background + info
   PhotoGridView.swift     the filmstrip
-  PreviewPane.swift       large full-resolution preview, zoom, empty states
+  ImageCanvas.swift       layer-backed zoom/pan surface
+  NavigatorView.swift     the corner navigator shown while zoomed in
+  PreviewPane.swift       preview states and overlays
   MetadataPanel.swift     the info sidebar
   BackgroundPicker.swift  backdrop chooser popover
   Controls.swift          variant toggle, flag buttons, navigation, zoom
@@ -204,7 +213,7 @@ SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.cache/module" \
 swift test --disable-sandbox --cache-path "$PWD/.cache/swiftpm"
 ```
 
-44 tests cover variant detection, pairing (including the cases above), flag
+48 tests cover variant detection, pairing (including the cases above), flag
 semantics, export planning, and real files on disk — scanning a folder, copying
 exactly the flagged variants, moving them out of the source, and refusing to
 overwrite an existing file. Previews are decoded from real files, including a
@@ -220,24 +229,81 @@ path on a folder of your choosing and prints what it did:
 dist/Sandglass.app/Contents/MacOS/Sandglass --report ~/Pictures/Wedding
 ```
 
+And two diagnostics for image quality and speed, which report facts rather than
+impressions:
+
+```bash
+# What resolution is the preview pane actually receiving?
+dist/Sandglass.app/Contents/MacOS/Sandglass --inspect ~/Pictures/Wedding
+
+# How long does opening a folder and moving through it really take?
+dist/Sandglass.app/Contents/MacOS/Sandglass --flow ~/Pictures/Wedding
+
+# Cold decode cost at every size the app requests
+dist/Sandglass.app/Contents/MacOS/Sandglass --bench ~/Pictures/Wedding
+```
+
+## How the preview is rendered
+
+The large pane is a `CALayer` whose `contents` is the decoded `CGImage`, sized to
+the image's **own pixel dimensions** and fitted to the pane by a single
+`CATransform3D`. Zoom and pan change that transform and nothing else.
+
+This matters more than it sounds. The obvious approach — a SwiftUI `Image` with
+`scaleEffect` — fails in two separate ways:
+
+1. **It cannot keep up.** Every gesture change invalidates layout for the whole
+   view tree, so zoom lags the cursor instead of tracking it. A layer transform
+   is handled by the compositor, so it follows the hand at refresh rate.
+2. **It cannot stay sharp.** `contentsGravity = .resizeAspect` rasterises the
+   bitmap to fit the *view rectangle*. Magnifying that flattened layer is
+   magnifying a screenshot, so zooming in only ever gets softer. Sizing the layer
+   to the photo's true pixels and scaling geometrically means zoom magnifies real
+   pixels.
+
+Three further details, each of which independently softens the image if missed:
+
+- **The image layer's `contentsScale` is pinned to `1`.** Left at the screen's
+  scale (2 on Retina) the layer allocates a 2× backing store and interpolates the
+  photo up into it before the transform even runs.
+- **The view's own layer composites at the display scale.** Left at the default 1
+  the whole pane is rendered into a 1× backing store and then blown up to fill a
+  Retina screen, softening every pixel.
+- **Decode budgets are part of the cache key.** Without that, a 320 px grid tile
+  and the large preview collide: whichever finishes first wins, and the pane ends
+  up drawing a tile-sized image across the whole window.
+
+The pane also refuses to show a low-resolution bitmap at all. It will fall back to
+a rendition decoded at the *current* budget, but never to a grid tile — briefly
+showing a loading state is far better than showing a mosaic of the photo.
+
+These are covered by tests that render the canvas and *measure* the output:
+magnifying a 3 px checkerboard by 2×/3×/4× must produce runs of exactly 6/9/12
+pixels with **zero** intermediate grey pixels. Interpolation of any kind fails
+that assertion.
+
 ## Performance notes
 
-Measured on the sample shoot with `Sandglass --bench <folder>`, a cold decode is
-only tens of milliseconds, so decode cost is not what makes an interface feel
-slow. What matters is not asking for the wrong thing:
+Measured with `Sandglass --bench <folder>` and `Sandglass --flow <folder>` on
+24 MP files, a cold decode is tens of milliseconds, so raw decode speed is not
+what makes a viewer feel slow. What matters is not asking for the wrong thing:
 
-- **One cache entry per rendition.** Keys include the pixel budget. Previously a
-  small grid tile and the large preview shared a key, so a 320 px tile could win
-  the race and then be drawn into the whole preview pane — the single biggest
-  cause of a soft-looking preview.
-- **Retina-correct sizing.** An `NSImage` made from a `CGImage` is sized in
-  points, so it is set to half the pixel count. Sizing it by pixel count makes it
-  draw at 1× on a 2× display, stretching each pixel over two device pixels.
+- **Decode only what the pane can show.** The pixel budget is derived from the
+  pane's real size (`--flow` reports it), not a fixed number. A fixed 4200 px
+  budget on a 6000 px file costs ~70 MB per image, which thrashes the cache and
+  forces a fresh decode on every step. The shipping window asks for ~1968 px.
+- **The visible photo goes first.** Single-file requests are independent
+  high-priority tasks; filmstrip tiles go through a lower-priority group, so
+  hundreds of queued tiles cannot starve the photo on screen.
 - **No filesystem calls in the decode path.** Cache lookup takes a path, not a
-  modification-date probe, so a grid render does not serialise hundreds of stats
-  behind one actor.
+  modification-date probe, so a grid render does not serialise hundreds of stat
+  calls behind one actor.
 - **Lazy bitmap realisation.** Thumbnails are created without forcing an
   immediate full decode, so a tile that scrolls past never pays for one.
+- **Zooming sharpens on demand.** A heavier decode is only requested once you
+  actually zoom in, where the extra pixels are visible.
+
+Measured on a 24 MP shoot: folder open 18 ms, average preview 42 ms.
 
 ### A note on NEF previews
 
