@@ -73,6 +73,8 @@ final class LibraryModel: ObservableObject {
     private var loadingThumbnails: Set<String> = []
     /// Full-resolution previews for the large pane, kept apart from the small
     /// prefetch images in `thumbnails` so a soft preview is never shown as final.
+    /// Native-resolution bitmap for the photo on screen. One entry only: these
+    /// are large, and only the current photo needs one.
     private var previewImages: [String: CGImage] = [:]
     /// Budget each entry in `previewImages` was decoded at, so a window resize
     /// knows to re-decode.
@@ -315,15 +317,39 @@ final class LibraryModel: ObservableObject {
         return thumbnails[cacheKey(shot, variant, previewPixelBudget)]?.image
     }
 
-    /// True once a decode at (or above) the current budget has landed.
+    /// True once the whole file has been decoded — not a proxy, not a budget.
     ///
-    /// Budget-aware on purpose: after the pane changes size the previous decode
-    /// no longer counts, so the callers that wait on this will correctly wait for
-    /// the re-decode.
+    /// The test is whether the bitmap matches what the file reports about itself.
+    /// That is a much stronger claim than "big enough for the pane", and it is the
+    /// property that actually decides whether fine detail is present.
     func hasFullResolutionPreview(for shot: Shot, kind variant: FileKind) -> Bool {
         guard let image = previewImages[fileKey(shot, variant)] else { return false }
-        _ = image
-        return (previewBudgets[fileKey(shot, variant)] ?? 0) >= previewPixelBudget
+        return isWholeImage(image, for: shot, kind: variant)
+    }
+
+    /// Whether a decoded bitmap is the entire image the file holds.
+    private func isWholeImage(_ image: CGImage, for shot: Shot, kind variant: FileKind) -> Bool {
+        guard let url = shot.url(for: variant),
+              let source = ThumbnailLoader.sourcePixelSize(of: url) else {
+            // No dimension metadata to compare against; assume the decode is whole.
+            return true
+        }
+        // Orientation can swap the axes, so accept either arrangement.
+        let matches = (image.width == Int(source.width) && image.height == Int(source.height))
+            || (image.width == Int(source.height) && image.height == Int(source.width))
+        return matches
+    }
+
+    /// Human-readable account of what is on screen, for the diagnostics.
+    func decodeReport(for shot: Shot, kind variant: FileKind) -> String {
+        guard let url = shot.url(for: variant) else { return "no file" }
+        let source = ThumbnailLoader.sourcePixelSize(of: url)
+        let decoded = previewImages[fileKey(shot, variant)]
+        let sourceText = source.map { "\(Int($0.width))x\(Int($0.height))" } ?? "?"
+        let decodedText = decoded.map { "\($0.width)x\($0.height)" } ?? "not decoded"
+        guard let decoded, let source else { return "file \(sourceText) -> \(decodedText)" }
+        let whole = isWholeImage(decoded, for: shot, kind: variant)
+        return "file \(sourceText) -> \(decodedText)  \(whole ? "whole image" : "PARTIAL — a proxy, not the file")"
     }
 
     /// Hand the file to the system so the shot is still reachable when its
@@ -625,14 +651,23 @@ final class LibraryModel: ObservableObject {
     private func requestFullResolutionPreview() {
         guard let shot = currentShot, let url = shot.url(for: kind) else { return }
         let key = fileKey(shot, kind)
-        let budget = previewPixelBudget
 
-        // Already have this photo at this budget: nothing to do.
+        // Decode the file at its own resolution. Anything less is a downscale,
+        // and measuring a 6000 px JPEG shown through a 1968 px proxy put the loss
+        // at ~12% of fine detail — visible as softness at normal viewing size.
+        let budget = max(previewPixelBudget, ThumbnailLoader.nativeRequest)
+
+        // Already decoded at native resolution: nothing to do.
         if previewImages[key] != nil, previewBudgets[key] == budget { return }
         guard detailTasks[key] == nil else { return }
 
+        // Drop any other photo's native bitmap before decoding a new one.
+        if previewImages.count > 1 { previewImages.removeAll() }
+
         detailTasks[key] = Task {
-            let result = await ThumbnailLoader.shared.thumbnail(for: url, maxPixel: budget)
+            // Native resolution, held only for the current photo and deliberately
+            // kept out of the shared cache so it cannot evict everything else.
+            let result = await ThumbnailLoader.shared.uncachedNativeImage(for: url)
             self.detailTasks[key] = nil
             guard let result else {
                 self.failedThumbnails.insert(key)

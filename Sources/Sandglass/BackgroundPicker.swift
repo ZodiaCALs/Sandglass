@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct BackgroundPicker: View {
     @Binding var modeRaw: String
     @Binding var presetID: String
+    @Binding var customHex: String
     @Binding var imageDim: Double
     @ObservedObject var imageLoader: BackgroundImageLoader
     @State private var importError: String?
@@ -26,9 +27,13 @@ struct BackgroundPicker: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
-            if mode == .preset {
+
+            switch mode {
+            case .preset:
                 colourGrid
-            } else {
+            case .custom:
+                colourWheel
+            case .image:
                 pictureControls
             }
 
@@ -86,6 +91,59 @@ struct BackgroundPicker: View {
             }
         }
     }
+
+    // MARK: Colour wheel
+
+    private var customBinding: Binding<Color> {
+        Binding(
+            get: { Color(hex: customHex) ?? .black },
+            set: { customHex = $0.hexString }
+        )
+    }
+
+    private var colourWheel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ColorPicker(
+                "Background colour",
+                selection: customBinding,
+                supportsOpacity: false
+            )
+            .labelsHidden()
+
+            // A row of useful starting points, then fine-tune in the wheel.
+            HStack(spacing: 6) {
+                ForEach(Self.quickColours, id: \.self) { hex in
+                    Button {
+                        customHex = hex
+                    } label: {
+                        RoundedRectangle(cornerRadius: 5, style: .continuous)
+                            .fill(Color(hex: hex) ?? .black)
+                            .frame(height: 22)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                    .strokeBorder(
+                                        hex == customHex ? Color.accentColor : Color.white.opacity(0.2),
+                                        lineWidth: hex == customHex ? 2 : 1
+                                    )
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .help(hex)
+                }
+            }
+
+            Text(customHex)
+                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// Neutral and dark tones that suit a photo viewer.
+    private static let quickColours = [
+        "#111318", "#1C2230", "#2B3550", "#3A3F4B",
+        "#4A3B33", "#2F3E38", "#3B2F42", "#8A8F99",
+        "#C9CBD1", "#EDEAE4"
+    ]
 
     // MARK: Picture
 

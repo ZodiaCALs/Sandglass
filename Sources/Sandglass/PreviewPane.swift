@@ -40,6 +40,9 @@ struct PreviewPane: View {
 
     /// Which part of the photo is on screen, in normalised image coordinates.
     @State private var visibleRegion = CGRect(x: 0, y: 0, width: 1, height: 1)
+    /// Bumped on every viewport change so the navigator always redraws, even when
+    /// the rectangle itself compares equal.
+    @State private var viewportTick = 0
 
     /// Above this the photo no longer fits the pane, so the navigator is useful.
     private static let navigatorThreshold: CGFloat = 1.01
@@ -70,7 +73,6 @@ struct PreviewPane: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
         .overlay(alignment: .bottom) {
             if let toast {
                 toastView(toast)
@@ -87,7 +89,7 @@ struct PreviewPane: View {
         }
         .animation(.easeOut(duration: 0.2), value: isFullResolution)
         .animation(.easeOut(duration: 0.18), value: isZoomedIn)
-        .padding(10)
+        .padding(6)
     }
 
     /// Shown only while zoomed in, where knowing your position actually matters.
@@ -127,20 +129,22 @@ struct PreviewPane: View {
                 // Reveal more detail only once the user actually zooms in.
                 model.requestSharperPreviewWhileZoomed(zoomLevel: level)
             },
-            onViewportChange: { region in
-                // Only publish meaningful movement, so scrolling does not
-                // re-render SwiftUI on every frame.
-                if abs(region.minX - visibleRegion.minX) > 0.002
-                    || abs(region.minY - visibleRegion.minY) > 0.002
-                    || abs(region.width - visibleRegion.width) > 0.002 {
+            onViewportChange: { region, tick in
+                // Publish the region together with its tick. The tick is what
+                // guarantees the navigator redraws, so the rectangle keeps up
+                // with zooming instead of appearing stuck.
+                if abs(region.width - visibleRegion.width) > 0.0005
+                    || abs(region.minX - visibleRegion.minX) > 0.0005
+                    || abs(region.minY - visibleRegion.minY) > 0.0005
+                    || tick != viewportTick {
                     visibleRegion = region
+                    viewportTick = tick
                 }
             },
             onCanvasReady: { canvas in
                 zoom.attach(canvas: canvas)
             }
         )
-        .background(Color.black.opacity(0.18))
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         // The model sizes its decodes from the real pane, so a big window gets
         // more pixels and a small one stops paying for them.

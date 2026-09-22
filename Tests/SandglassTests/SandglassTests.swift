@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import AppKit
 import ImageIO
 @testable import Sandglass
 
@@ -910,9 +911,18 @@ struct RenderedSharpnessTests {
         #expect(midRow.allSatisfy { $0 > 235 }, "the photo should fill the middle band")
     }
 
-    @Test("Panning is limited so the photo can never be dragged out of view")
-    func panLimitsKeepPhotoVisible() throws {
-        let side = 400
+    /// Where the centre of the pane sits within the image, derived from the
+    /// drawn frame. Unambiguous, unlike `CALayer.convert` on a transformed layer.
+    private func centreInImage(_ canvas: ImageCanvasView, pane: CGSize, side: Int) -> CGPoint {
+        let frame = canvas.imageContentsLayer.frame
+        let drawn = Double(side) * Double(canvas.fitScaleValue) * Double(canvas.zoom)
+        return CGPoint(
+            x: (Double(pane.width) / 2 - Double(frame.minX)) / drawn * Double(side),
+            y: (Double(pane.height) / 2 - Double(frame.minY)) / drawn * Double(side)
+        )
+    }
+
+    private func solidImage(side: Int) -> CGImage {
         let context = CGContext(
             data: nil, width: side, height: side,
             bitsPerComponent: 8, bytesPerRow: 0,
@@ -921,22 +931,171 @@ struct RenderedSharpnessTests {
         )!
         context.setFillColor(gray: 1, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        return context.makeImage()!
+    }
 
+    @Test("Zooming about an off-centre point never accumulates drift")
+    func zoomDoesNotDrift() throws {
+        let side = 600
+        let pane = CGSize(width: 800, height: 600)
         let canvas = ImageCanvasView()
-        canvas.setImage(context.makeImage()!, resetZoom: true)
-        canvas.frame = CGRect(x: 0, y: 0, width: side, height: side)
+        canvas.setImage(solidImage(side: side), resetZoom: true)
+        canvas.frame = CGRect(origin: .zero, size: pane)
         canvas.layout()
 
-        // At fit there is nothing to pan: the photo exactly fills the pane.
-        var limit = canvas.panLimit()
-        #expect(limit.x == 0 && limit.y == 0, "no slack at fit")
-        #expect(canvas.zoom == 1)
+        let start = centreInImage(canvas, pane: pane, side: side)
+        #expect(abs(start.x - 300) < 0.5 && abs(start.y - 300) < 0.5, "should start centred")
 
-        // At 2x there is exactly one pane-width of slack in each direction, so
-        // an edge can be brought to the middle but no further.
+        // A pinch into the bottom-right corner, then all the way back out.
+        let anchor = CGPoint(x: 780, y: 570)
+        for step in 1...30 {
+            canvas.setZoom(anchor: anchor, value: 1 + CGFloat(step) * 0.08)
+        }
+        for step in stride(from: 30, through: 1, by: -1) {
+            canvas.setZoom(anchor: anchor, value: 1 + CGFloat(step) * 0.08)
+        }
+
+        // Anchored zoom legitimately leaves the photo shifted; the invariant is
+        // that resetting returns it exactly, with no residue from the gestures.
+        canvas.resetZoom()
+        let after = centreInImage(canvas, pane: pane, side: side)
+        #expect(abs(after.x - 300) < 0.5, "x drifted to \(after.x) after zooming")
+        #expect(abs(after.y - 300) < 0.5, "y drifted to \(after.y) after zooming")
+    }
+
+    @Test("Resizing the pane never slides the photo into a corner")
+    func resizeDoesNotDrift() throws {
+        let side = 600
+        let canvas = ImageCanvasView()
+        canvas.setImage(solidImage(side: side), resetZoom: true)
+        var pane = CGSize(width: 800, height: 600)
+        canvas.frame = CGRect(origin: .zero, size: pane)
+        canvas.layout()
+
+        canvas.setZoomFromUI(3)
+
+        // Repeated resizes, including while zoomed in: the centred part of the
+        // photo must not move, and nothing may accumulate.
+        for _ in 0..<40 {
+            pane = CGSize(width: 640, height: 480)
+            canvas.frame = CGRect(origin: .zero, size: pane)
+            canvas.layout()
+            pane = CGSize(width: 1000, height: 760)
+            canvas.frame = CGRect(origin: .zero, size: pane)
+            canvas.layout()
+        }
+        pane = CGSize(width: 800, height: 600)
+        canvas.frame = CGRect(origin: .zero, size: pane)
+        canvas.layout()
+
+        let zoomed = centreInImage(canvas, pane: pane, side: side)
+        #expect(abs(zoomed.x - 300) < 1, "x drifted to \(zoomed.x) while zoomed and resizing")
+        #expect(abs(zoomed.y - 300) < 1, "y drifted to \(zoomed.y) while zoomed and resizing")
+
+        canvas.resetZoom()
+        let fitted = centreInImage(canvas, pane: pane, side: side)
+        #expect(abs(fitted.x - 300) < 0.5, "x drifted to \(fitted.x) after reset")
+        #expect(abs(fitted.y - 300) < 0.5, "y drifted to \(fitted.y) after reset")
+    }
+
+    @Test("A mouse wheel zooms, a trackpad two-finger scroll pans")
+    func scrollGestureRouting() {
+        typealias Action = ImageCanvasView.ScrollAction
+
+        // A wheel has detents, not precise deltas: zoom about the pointer.
+        #expect(
+            ImageCanvasView.scrollAction(scrollingDeltaY: 1, hasPreciseDeltas: false, modifierFlags: [])
+                == .zoom(factor: 1 + ImageCanvasView.wheelZoomRate)
+        )
+        // Rolling the other way zooms out.
+        if case .zoom(let factor)? = ImageCanvasView.scrollAction(
+            scrollingDeltaY: -1, hasPreciseDeltas: false, modifierFlags: []
+        ) {
+            #expect(factor < 1, "scrolling down should zoom out, got factor \(factor)")
+        } else {
+            Issue.record("a downward wheel notch should zoom out")
+        }
+
+        // A trackpad pans by default...
+        #expect(
+            ImageCanvasView.scrollAction(scrollingDeltaY: 4, hasPreciseDeltas: true, modifierFlags: [])
+                == .pan
+        )
+        // ...and zooms with ⌘ or ⌥ held.
+        for flags: NSEvent.ModifierFlags in [.command, .option] {
+            if case .zoom? = ImageCanvasView.scrollAction(
+                scrollingDeltaY: 4, hasPreciseDeltas: true, modifierFlags: flags
+            ) {} else {
+                Issue.record("modifier-scroll on a trackpad should zoom")
+            }
+        }
+
+        // An event with no movement does nothing at all.
+        #expect(
+            ImageCanvasView.scrollAction(scrollingDeltaY: 0, hasPreciseDeltas: false, modifierFlags: []) == nil
+        )
+    }
+
+    @Test("Every viewport change carries a new tick")
+    func viewportTickAdvances() throws {
+        let side = 600
+        let pane = CGSize(width: 800, height: 600)
+        let canvas = ImageCanvasView()
+        canvas.setImage(solidImage(side: side), resetZoom: true)
+        canvas.frame = CGRect(origin: .zero, size: pane)
+        canvas.layout()
+
+        var ticks: [Int] = []
+        var widthsByZoom: [CGFloat: CGFloat] = [:]
+        canvas.onViewportChanged = { region, tick in
+            ticks.append(tick)
+            widthsByZoom[canvas.zoom] = region.width
+        }
+
         canvas.setZoomFromUI(2)
-        limit = canvas.panLimit()
-        #expect(abs(limit.x - CGFloat(side) / 2) <= 1, "expected half a pane of slack, got \(limit.x)")
-        #expect(abs(limit.y - CGFloat(side) / 2) <= 1, "expected half a pane of slack, got \(limit.y)")
+        canvas.setZoomFromUI(4)
+        canvas.resetZoom()
+
+        #expect(ticks.count == 3, "expected one report per change, got \(ticks.count)")
+        // Strictly increasing, so a view comparing only the tick still redraws.
+        #expect(ticks == ticks.sorted(), "ticks must increase: \(ticks)")
+        #expect(Set(ticks).count == ticks.count, "ticks must be unique: \(ticks)")
+
+        // The region genuinely narrows as the photo is magnified, which is what
+        // the navigator rectangle draws.
+        let atFit = try #require(widthsByZoom[1], "fit should be reported")
+        let at2x = try #require(widthsByZoom[2], "2x should be reported")
+        let at4x = try #require(widthsByZoom[4], "4x should be reported")
+        #expect(atFit > at2x, "zooming in should shrink the visible region")
+        #expect(at2x > at4x, "zooming further in should shrink it again")
+        #expect(abs(atFit - 1.0) < 0.001, "at fit the whole photo is visible")
+    }
+
+    @Test("The photo can never be panned out of view")
+    func panningStaysInBounds() throws {
+        let side = 600
+        let pane = CGSize(width: 800, height: 600)
+        let canvas = ImageCanvasView()
+        canvas.setImage(solidImage(side: side), resetZoom: true)
+        canvas.frame = CGRect(origin: .zero, size: pane)
+        canvas.layout()
+
+        // At fit the photo exactly fills one axis, so it must stay centred.
+        #expect(canvas.zoom == 1)
+        var centre = centreInImage(canvas, pane: pane, side: side)
+        #expect(abs(centre.x - 300) < 0.5 && abs(centre.y - 300) < 0.5)
+
+        // Zoomed to 2x, the visible area is 300x300 image px within a 800x600
+        // pane, so the centre may range over [150, 450] and no further.
+        canvas.setZoomFromUI(2)
+        canvas.centreOn(normalised: CGPoint(x: 1, y: 1))   // hard bottom-right
+        centre = centreInImage(canvas, pane: pane, side: side)
+        #expect(centre.x <= 450.5, "centre ran past the right edge: \(centre.x)")
+        #expect(centre.y <= 450.5, "centre ran past the bottom edge: \(centre.y)")
+
+        canvas.centreOn(normalised: CGPoint(x: 0, y: 0))   // hard top-left
+        centre = centreInImage(canvas, pane: pane, side: side)
+        #expect(centre.x >= 149.5, "centre ran past the left edge: \(centre.x)")
+        #expect(centre.y >= 149.5, "centre ran past the top edge: \(centre.y)")
     }
 }

@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import ImageIO
 @testable import Sandglass
 
 /// Guards the single request path that feeds the large preview.
@@ -39,67 +40,153 @@ struct PreviewRequestPathTests {
         return condition()
     }
 
-    @Test("The preview resolves for every photo stepped through")
-    func previewResolvesForEveryShot() async throws {
+    @Test("Every photo reaches a definite state, and decodable ones show the whole file")
+    func everyShotResolves() async throws {
         let model = try await loadedModel()
+        var decoded = 0
+        var undecodable = 0
 
         for (position, shot) in model.shots.enumerated() {
             model.go(to: position)
-            let resolved = await waitUntil {
-                model.previewState(for: shot, kind: model.kind) == .ready
-            }
-            #expect(resolved, "\(shot.baseName) never produced a preview")
 
-            // And it must be the dedicated preview decode, not a neighbour
-            // prefetch standing in for one.
-            let isFullPreview = await waitUntil {
+            // Settle into either a rendered image or an explicit "unavailable" —
+            // never a state that hangs.
+            let settled = await waitUntil(timeout: 8) {
+                let state = model.previewState(for: shot, kind: model.kind)
+                return state == .ready || state == .unavailable
+            }
+            let state = model.previewState(for: shot, kind: model.kind)
+            #expect(settled, "\(shot.baseName) never settled (stuck at \(state))")
+
+            if state == .unavailable {
+                // Some fixtures are placeholder raws ImageIO cannot decode. That
+                // must be reported, not papered over with a smaller bitmap.
+                undecodable += 1
+                continue
+            }
+
+            decoded += 1
+            let whole = await waitUntil(timeout: 8) {
                 model.hasFullResolutionPreview(for: shot, kind: model.kind)
             }
-            #expect(isFullPreview, "\(shot.baseName) never reached full resolution")
+            #expect(whole, "\(shot.baseName) rendered a proxy instead of the whole file")
         }
+
+        #expect(decoded > 0, "at least some fixtures should decode")
+        // The synthetic raws are expected to be undecodable; the JPEGs are not.
+        #expect(undecodable <= 4, "unexpected number of undecodable files: \(undecodable)")
     }
 
-    @Test("Changing the pane size re-decodes at the new budget")
-    func budgetChangeReDecodes() async throws {
+    /// Native pixel size of a file, straight from its metadata.
+    private func nativeSize(_ url: URL) -> Int? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int else { return nil }
+        return max(width, height)
+    }
+
+    @Test("The preview is decoded at the file's own resolution, not a downscale")
+    func previewIsNativeResolution() async throws {
         let model = try await loadedModel()
         let shot = try #require(model.shots.first { $0.jpgURL != nil })
+        let url = try #require(shot.jpgURL)
+        let native = try #require(nativeSize(url), "fixture should report its size")
+
         model.go(to: try #require(model.shots.firstIndex(of: shot)))
+        let ready = await waitUntil { model.hasFullResolutionPreview(for: shot, kind: .jpg) }
+        #expect(ready, "preview should resolve")
 
-        let firstBudget = model.previewPixelBudget
-        let firstReady = await waitUntil { model.hasFullResolutionPreview(for: shot, kind: .jpg) }
-        #expect(firstReady)
-
-        // A much larger pane must invalidate the smaller decode.
-        model.reportCanvasSize(CGSize(width: 1600, height: 1200))
-        #expect(model.previewPixelBudget > firstBudget, "budget should grow with the pane")
-
-        let reDecoded = await waitUntil {
-            model.hasFullResolutionPreview(for: shot, kind: .jpg)
-                && model.previewCGImage(for: shot, kind: .jpg) != nil
-        }
-        #expect(reDecoded, "preview should be refreshed after the pane grew")
+        let image = try #require(model.previewCGImage(for: shot, kind: .jpg))
+        // A downscaled proxy loses fine detail; the pane must get the real pixels.
+        #expect(
+            image.width == native,
+            "expected native \(native)px, got \(image.width)px — the preview is a downscale"
+        )
     }
 
-    @Test("A bigger pane yields a bigger bitmap")
-    func biggerPaneYieldsMorePixels() async throws {
+    @Test("Resizing the pane keeps the preview at native resolution")
+    func resizeKeepsNativeResolution() async throws {
         let model = try await loadedModel()
         let shot = try #require(model.shots.first { $0.jpgURL != nil })
+        let url = try #require(shot.jpgURL)
+        let native = try #require(nativeSize(url))
+
         model.go(to: try #require(model.shots.firstIndex(of: shot)))
         _ = await waitUntil { model.hasFullResolutionPreview(for: shot, kind: .jpg) }
 
-        // A small pane asks for few pixels.
+        // Shrinking then growing the pane must not leave a smaller decode behind.
         model.reportCanvasSize(CGSize(width: 420, height: 340))
-        let smallReady = await waitUntil { model.hasFullResolutionPreview(for: shot, kind: .jpg) }
-        #expect(smallReady, "small pane should settle")
-        let small = try #require(model.previewCGImage(for: shot, kind: .jpg))
-        #expect(small.width <= model.previewPixelBudget, "decode should respect the budget")
-
-        // A large pane must produce a genuinely bigger bitmap.
+        _ = await waitUntil { model.previewCGImage(for: shot, kind: .jpg) != nil }
         model.reportCanvasSize(CGSize(width: 1400, height: 1100))
-        let grew = await waitUntil {
-            model.hasFullResolutionPreview(for: shot, kind: .jpg)
-                && (model.previewCGImage(for: shot, kind: .jpg)?.width ?? 0) > small.width
+        let settled = await waitUntil {
+            model.previewCGImage(for: shot, kind: .jpg)?.width == native
         }
-        #expect(grew, "a larger pane should decode a larger bitmap")
+        let image = try #require(model.previewCGImage(for: shot, kind: .jpg))
+        #expect(settled, "expected native \(native)px after resize, got \(image.width)px")
+    }
+
+    /// Pixel size of what actually decodes from a file.
+    ///
+    /// Metadata can advertise more than the file really contains — this NEF
+    /// embeds only a small preview — so this is the honest reference.
+    private func decodableSize(_ url: URL) -> CGSize? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                  kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+                  // Same orientation handling as the app, so dimensions are compared
+                  // in the same orientation.
+                  kCGImageSourceCreateThumbnailWithTransform: true,
+                  kCGImageSourceThumbnailMaxPixelSize: ThumbnailLoader.nativeRequest
+              ] as CFDictionary) else { return nil }
+        return CGSize(width: image.width, height: image.height)
+    }
+
+    @Test("JPG and NEF of the same shot are decoded as separate files")
+    func variantsAreDistinctFiles() async throws {
+        let model = try await loadedModel()
+
+        // Use a shot whose NEF actually contains a decodable image. Most of the
+        // synthetic fixtures are placeholder TIFFs that ImageIO refuses (see the
+        // "NEF whose preview cannot be decoded" test); DSC_0008 carries a real one.
+        let paired = try #require(
+            model.shots.first { $0.isPaired && $0.baseName == "DSC_0008" },
+            "expected the real-NEF fixture"
+        )
+        let position = try #require(model.shots.firstIndex(of: paired))
+        let jpgURL = try #require(paired.jpgURL)
+        let nefURL = try #require(paired.nefURL)
+        #expect(jpgURL != nefURL, "the two variants are different files on disk")
+        #expect(jpgURL.pathExtension != nefURL.pathExtension)
+
+        model.go(to: position)
+        model.setKind(.jpg)
+        let jpgReady = await waitUntil { model.hasFullResolutionPreview(for: paired, kind: .jpg) }
+        #expect(jpgReady, "the JPG should decode")
+        let jpg = try #require(model.previewCGImage(for: paired, kind: .jpg))
+
+        // Switching variant must decode the NEF as its own file, not reuse the JPG.
+        model.setKind(.nef)
+        let nefReady = await waitUntil { model.hasFullResolutionPreview(for: paired, kind: .nef) }
+        #expect(nefReady, "switching variant must decode the NEF as its own file")
+
+        let nef = try #require(model.previewCGImage(for: paired, kind: .nef))
+
+        // Each variant reflects its own file, at the full size that file can give.
+        let expectedJPG = try #require(decodableSize(jpgURL))
+        let expectedNEF = try #require(decodableSize(nefURL))
+        #expect(
+            CGSize(width: jpg.width, height: jpg.height) == expectedJPG,
+            "JPG preview should match its own file"
+        )
+        #expect(
+            CGSize(width: nef.width, height: nef.height) == expectedNEF,
+            "NEF preview should match its own file"
+        )
+        // And they are genuinely different images, not one standing in for the other.
+        #expect(
+            CGSize(width: jpg.width, height: jpg.height) != CGSize(width: nef.width, height: nef.height),
+            "the two variants should not be the same bitmap"
+        )
     }
 }

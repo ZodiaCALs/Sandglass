@@ -16,6 +16,8 @@ struct RootView: View {
     @AppStorage("backgroundMode") private var backgroundModeRaw = BackgroundMode.preset.rawValue
     @AppStorage("backgroundPreset") private var backgroundPresetID = "slate"
     @AppStorage("backgroundImageDim") private var backgroundImageDim = 0.35
+    /// Stored as hex so the wheel selection survives relaunch.
+    @AppStorage("backgroundCustomHex") private var backgroundCustomHex = "#2B3550"
     @StateObject private var backgroundImage = BackgroundImageLoader()
 
     private var backgroundMode: BackgroundMode {
@@ -24,9 +26,15 @@ struct RootView: View {
     private var backgroundPreset: BackgroundPreset {
         BackgroundPreset.preset(id: backgroundPresetID)
     }
+    private var customColor: Color { Color(hex: backgroundCustomHex) ?? Color(red: 0.17, green: 0.21, blue: 0.31) }
+
     /// Light backdrops need dark text, and vice versa.
     private var prefersDarkAppearance: Bool {
-        backgroundMode == .image ? !backgroundImage.isLight : !backgroundPreset.isLight
+        switch backgroundMode {
+        case .image: return !backgroundImage.isLight
+        case .custom: return !customColor.isLight
+        case .preset: return !backgroundPreset.isLight
+        }
     }
 
     init(model: LibraryModel = LibraryModel()) {
@@ -40,6 +48,7 @@ struct RootView: View {
             StageBackground(
                 mode: backgroundMode,
                 preset: backgroundPreset,
+                customColor: customColor,
                 image: backgroundImage.image,
                 imageDim: backgroundImageDim
             )
@@ -91,6 +100,7 @@ struct RootView: View {
             BackgroundPicker(
                 modeRaw: $backgroundModeRaw,
                 presetID: $backgroundPresetID,
+                customHex: $backgroundCustomHex,
                 imageDim: $backgroundImageDim,
                 imageLoader: backgroundImage
             )
@@ -271,6 +281,10 @@ struct HelpSheet: View {
         ("B", "Flag both JPG and NEF"),
         ("1 / 2", "Flag only that variant"),
         ("+ / − / 0", "Zoom in / out / reset"),
+        ("Mouse wheel", "Zoom about the pointer"),
+        ("Pinch / ⌘-scroll", "Zoom on a trackpad"),
+        ("Two-finger scroll", "Pan while zoomed in"),
+        ("Double-click", "Fit ↔ 2×"),
         ("M", "Show file info — EXIF, camera, GPS"),
         ("B", "Background colour or picture"),
         ("⌘O", "Open folder"),

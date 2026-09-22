@@ -102,7 +102,7 @@ enum HeadlessReport {
 
         print("Budget reported by the model: \(model.previewPixelBudget) px")
         print("")
-        print(pad("SHOT", 18) + pad("NATIVE", 12) + pad("DRAWN", 12) + "COVERAGE")
+        print(pad("SHOT", 18) + pad("VARIANT", 9) + "DECODE")
 
         // Let the async preview work settle, the way it would while the user looks.
         for _ in 0..<200 { RunLoop.main.run(until: Date().addingTimeInterval(0.01)) }
@@ -116,35 +116,16 @@ enum HeadlessReport {
                 waited += 1
             }
 
-            guard let drawn = model.previewCGImage(for: shot, kind: model.kind) else {
-                print(pad(shot.baseName, 18) + pad("-", 12) + pad("nil", 12) + "no preview")
-                blocky += 1
-                continue
-            }
-
-            // Native size of the file on disk.
-            var native = "-"
-            if let url = shot.url(for: model.kind),
-               let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-               let w = props[kCGImagePropertyPixelWidth] as? Int,
-               let h = props[kCGImagePropertyPixelHeight] as? Int {
-                native = "\(w)x\(h)"
-                // A preview much smaller than the pane needs is what looks blocky.
-                let needed = model.previewPixelBudget
-                if max(drawn.width, drawn.height) < needed / 2 {
-                    blocky += 1
-                }
-            }
-
-            let coverage = native == "-" ? "" : "\(drawn.width)x\(drawn.height)"
-            print(pad(shot.baseName, 18) + pad(native, 12) + pad(coverage, 12)
-                  + (max(drawn.width, drawn.height) < model.previewPixelBudget / 2 ? "TOO SMALL" : "ok"))
+            _ = model.previewCGImage(for: shot, kind: model.kind)
+            let report = model.decodeReport(for: shot, kind: model.kind)
+            print(pad(shot.baseName, 18) + pad(model.kind.label, 9) + report)
+            if report.contains("PARTIAL") { blocky += 1 }
         }
 
         print("")
-        print(blocky == 0 ? "PASS: every preview is at the requested resolution"
-                          : "FAIL: \(blocky) preview(s) below half the budget")
+        print(blocky == 0
+              ? "PASS: the pane receives each file's whole image"
+              : "FAIL: \(blocky) file(s) decoded to a proxy instead of the whole image")
         exit(blocky == 0 ? 0 : 1)
     }
 

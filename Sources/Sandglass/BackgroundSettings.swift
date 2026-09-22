@@ -63,11 +63,13 @@ struct BackgroundPreset: Identifiable, Hashable {
 /// How the backdrop is chosen.
 enum BackgroundMode: String, CaseIterable {
     case preset
+    case custom
     case image
 
     var label: String {
         switch self {
-        case .preset: return "Colour"
+        case .preset: return "Preset"
+        case .custom: return "Wheel"
         case .image: return "Picture"
         }
     }
@@ -225,6 +227,8 @@ final class BackgroundImageLoader: ObservableObject {
 struct StageBackground: View {
     let mode: BackgroundMode
     let preset: BackgroundPreset
+    /// Colour chosen with the wheel, used when `mode` is `.custom`.
+    let customColor: Color
     let image: NSImage?
     /// Darkens or lightens the picture so the glass panels stay readable.
     let imageDim: Double
@@ -237,6 +241,16 @@ struct StageBackground: View {
                     colors: [preset.top, preset.bottom],
                     startPoint: .topLeading,
                     endPoint: .bottomTrailing
+                )
+                .ignoresSafeArea()
+
+            case .custom:
+                // A subtle vertical shade keeps it from looking flat while
+                // staying true to the colour that was picked.
+                LinearGradient(
+                    colors: [customColor, customColor.opacity(0.72)],
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
                 .ignoresSafeArea()
 

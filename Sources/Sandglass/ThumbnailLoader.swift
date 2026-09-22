@@ -46,6 +46,14 @@ actor ThumbnailLoader {
     nonisolated static let tilePixel = 320
     /// Upper bound for any preview request.
     nonisolated static let maximumPreviewPixel = 4200
+    /// Largest bitmap decoded whole. Beyond this the image is scaled on decode.
+    nonisolated static let directDecodeCeiling = 12_000
+    /// Ask for the file's own pixels.
+    ///
+    /// `CGImageSourceCreateThumbnailAtIndex` returns the native image whenever the
+    /// request exceeds it, so this means "full resolution" without needing to know
+    /// the file's dimensions first. The cap only guards against absurd sizes.
+    nonisolated static let nativeRequest = 12_000
 
     /// Load a preview for `url`.
     ///
@@ -53,6 +61,42 @@ actor ThumbnailLoader {
     /// must never queue behind the filmstrip's tiles.
     func thumbnail(for url: URL, maxPixel: Int, urgent: Bool = true) async -> Thumbnail? {
         await load(url: url, maxPixel: maxPixel, urgent: urgent)
+    }
+
+    /// Decode the file itself, at its own resolution, without caching.
+    ///
+    /// This deliberately does **not** go through the thumbnail API. A photo editor
+    /// opens the image; it does not ask the system for a thumbnail. For a JPEG the
+    /// two agree, but for a raw file the thumbnail route can hand back an embedded
+    /// JPEG preview instead of the decoded raw, which is exactly the kind of
+    /// softness this app must not show.
+    ///
+    /// A native decode of a 24 MP photo is roughly 144 MB, so the caller holds the
+    /// bitmap itself and releases it on navigation rather than sharing a cache.
+    func uncachedNativeImage(for url: URL) async -> Thumbnail? {
+        let key = Key(path: url.path, maxPixel: Self.nativeRequest)
+        if let running = inFlight[key] { return await running.value }
+
+        let task = Task<Thumbnail?, Never>(priority: .userInitiated) {
+            Self.decodeFull(url: url)
+        }
+        inFlight[key] = task
+        let result = await task.value
+        inFlight[key] = nil
+        return result
+    }
+
+    /// Pixel dimensions the file reports for itself.
+    ///
+    /// Used to confirm that a decode really did return the whole image rather than
+    /// a smaller proxy.
+    nonisolated static func sourcePixelSize(of url: URL) -> CGSize? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let width = props[kCGImagePropertyPixelWidth] as? Int,
+              let height = props[kCGImagePropertyPixelHeight] as? Int,
+              width > 1, height > 1 else { return nil }
+        return CGSize(width: width, height: height)
     }
 
     /// Load several previews in one pass, returning them in request order.
@@ -145,6 +189,84 @@ actor ThumbnailLoader {
     }
 
     // MARK: Decoding
+
+    /// Decode the image proper — the equivalent of opening the file in an editor.
+    ///
+    /// `CGImageSourceCreateImageAtIndex` returns the full image (demosaicing a raw
+    /// rather than reading its embedded preview) but does not apply the EXIF
+    /// orientation, so that is done here as a transform.
+    private nonisolated static func decodeFull(url: URL) -> Thumbnail? {
+        guard let source = CGImageSourceCreateWithURL(
+            url as CFURL,
+            [kCGImageSourceShouldCache: false] as CFDictionary
+        ), CGImageSourceGetCount(source) > 0 else { return nil }
+
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
+        let orientation = (properties[kCGImagePropertyOrientation] as? UInt32) ?? 1
+
+        // A decoded bitmap is four bytes per pixel. Past this ceiling the file is
+        // scaled instead, so a 100 MP scan cannot exhaust memory; everything a
+        // normal camera produces stays a whole-image decode.
+        let pixelWidth = properties[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let pixelHeight = properties[kCGImagePropertyPixelHeight] as? Int ?? 0
+        let longestEdge = max(pixelWidth, pixelHeight)
+        if longestEdge > Self.directDecodeCeiling {
+            return decode(url: url, maxPixel: Self.directDecodeCeiling)
+        }
+
+        // Eager: the bitmap is wanted now, and a lazy decode would only move the
+        // cost onto the drawing pass.
+        guard let image = CGImageSourceCreateImageAtIndex(
+            source, 0,
+            [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
+        ) else { return nil }
+
+        guard orientation != 1, let rotated = applyOrientation(orientation, to: image) else {
+            return Thumbnail(
+                image: image,
+                pixelSize: CGSize(width: image.width, height: image.height)
+            )
+        }
+        return Thumbnail(
+            image: rotated,
+            pixelSize: CGSize(width: rotated.width, height: rotated.height)
+        )
+    }
+
+    /// Apply an EXIF orientation to a decoded image.
+    private nonisolated static func applyOrientation(_ orientation: UInt32, to image: CGImage) -> CGImage? {
+        let swapsAxes = orientation >= 5
+        let width = swapsAxes ? image.height : image.width
+        let height = swapsAxes ? image.width : image.height
+
+        guard let context = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        // Place the image so that the transform below lands it correctly.
+        var transform = CGAffineTransform.identity
+        switch orientation {
+        case 2: transform = CGAffineTransform(translationX: CGFloat(width), y: 0).scaledBy(x: -1, y: 1)
+        case 3: transform = CGAffineTransform(translationX: CGFloat(width), y: CGFloat(height)).scaledBy(x: -1, y: -1)
+        case 4: transform = CGAffineTransform(translationX: 0, y: CGFloat(height)).scaledBy(x: 1, y: -1)
+        case 5: transform = CGAffineTransform(a: 0, b: 1, c: 1, d: 0, tx: 0, ty: 0)
+        case 6: transform = CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: CGFloat(width), ty: 0)
+        case 7: transform = CGAffineTransform(a: 0, b: -1, c: -1, d: 0, tx: CGFloat(width), ty: CGFloat(height))
+        case 8: transform = CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: CGFloat(height))
+        default: transform = .identity
+        }
+
+        context.concatenate(transform)
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+        return context.makeImage()
+    }
 
     /// Synchronous decode; always called from a detached context, never the main thread.
     private nonisolated static func decode(url: URL, maxPixel: Int) -> Thumbnail? {

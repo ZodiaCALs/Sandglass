@@ -98,46 +98,61 @@ dist/Sandglass.app/Contents/MacOS/Sandglass ~/Pictures/Wedding
 | `B` | Flag both JPG and NEF |
 | `1` / `2` | Flag only the JPG / only the NEF |
 | `+` `−` `0` | Zoom in / out / reset |
-| Pinch, or ⌘-scroll | Zoom about the cursor |
+| Mouse wheel | Zoom about the pointer |
+| Pinch, or ⌘-scroll | Zoom on a trackpad |
 | Two-finger scroll / drag | Pan while zoomed in |
 | Double-click | Toggle fit ↔ 2× |
+| Pinch / ⌘-scroll | Zoom about the pointer |
 
 When you zoom in, a **navigator** appears in the bottom-right corner: the whole
-photo with a rectangle marking the part on screen. Click or drag inside it to move
+photo with a rectangle marking the part on screen. The rectangle tracks every
+zoom and pan, so it always shows where you are. Click or drag inside it to move
 around; it hides again at fit.
+
+A mouse wheel zooms about the pointer; on a trackpad, pinch or ⌘-scroll zooms and
+two-finger scroll pans.
 | `M` | Show or hide the file info panel |
 | `⌘O` | Open a folder |
 | `⌘E` | Export flagged photos |
 | `⌘J` / `⌘K` | Show the JPG / show the NEF |
-| `B` | Background colour or picture |
+| `B` | Background colour wheel, presets or a picture |
 | `⌘R` | Reload the folder |
 | `?` (header button) | Shortcut reference in-app |
 
 ## Preview quality and speed
 
-The large preview is the point of the app, so it is decoded properly and quickly:
+The large pane is not a preview — it is the file, opened. That distinction turned
+out to matter:
 
-- **Native resolution.** The pane requests up to a 3200 px long edge; ImageIO
-  returns the image's own pixels when it is smaller than that, so a 1600 px JPG is
-  shown at 1600 px, not interpolated up from a thumbnail. Downscaling only
-  happens for images larger than the request.
+- **The file is decoded, not thumbnailed.** `CGImageSourceCreateImageAtIndex`
+  returns the image proper; `CGImageSourceCreateThumbnailAtIndex` can answer with
+  an embedded preview instead, which is exactly the softness this app must not
+  show. EXIF orientation is applied here as a transform, since the direct decode
+  does not apply it.
+- **The whole image, verified.** The app compares the decoded bitmap against the
+  dimensions the file reports about itself, and `--inspect` prints the result:
+  `file 6000x6000 -> 6000x6000  whole image`. A downscaled proxy would be
+  reported as `PARTIAL` rather than passing silently.
+- **Faster, as well as sharper.** Bypassing the thumbnail path took the average
+  from ~95 ms to under 10 ms per photo, because the system no longer decodes and
+  resamples synchronously.
 - **No colour management surprises.** Pixels are decoded in the file's own colour
-  space (sRGB stays sRGB) and drawn with high-quality interpolation. Sandglass
-  never applies a filter, tint, saturation change or blend mode to a photo.
-- **Small prefetch, then the sharp pass.** While you move through a folder, only
-  the neighbouring shots are prefetched, at a modest 1400 px, so the pane is
-  filled instantly. The full-resolution decode for the shot you actually stop on
-  is debounced by 90 ms, so holding an arrow key does not start a heavy decode for
-  every photo you pass. A small "Loading full resolution…" chip shows while the
-  sharp version is still on its way.
-- **Bounded cache.** Decoded previews are held in an LRU cache capped at 384 MB,
-  so a long culling session cannot grow without limit.
+  space and drawn without filters, tint, saturation changes or blend modes.
+- **Zoom magnifies real pixels**, because what is on screen is already the whole
+  file, and the framing is derived from state rather than accumulated movement,
+  so zooming and resizing can never drift the photo into a corner.
+- **Bounded memory.** The native bitmap is held only for the photo on screen and
+  kept out of the shared tile cache; one 24 MP decode is ~144 MB. Files above
+  12000 px on the long edge are scaled on decode so an extreme scan cannot
+  exhaust memory.
 
 ## Background
 
 The **◐** button in the header (or `B`) opens the background picker:
 
-- **Colour** — six presets chosen to keep the glass panels and their text legible.
+- **Preset** — six ready-made backdrops.
+- **Wheel** — a full colour picker for any colour you like, plus a row of neutral
+  starting points and a live hex readout.
 - **Picture** — pick any image. It is copied into Application Support and
   downscaled to a 2560 px long edge, so it keeps working even if you move the
   original. A dimming slider darkens it to taste.
@@ -213,7 +228,7 @@ SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.cache/module" \
 swift test --disable-sandbox --cache-path "$PWD/.cache/swiftpm"
 ```
 
-48 tests cover variant detection, pairing (including the cases above), flag
+52 tests cover variant detection, pairing (including the cases above), flag
 semantics, export planning, and real files on disk — scanning a folder, copying
 exactly the flagged variants, moving them out of the source, and refusing to
 overwrite an existing file. Previews are decoded from real files, including a
@@ -233,7 +248,7 @@ And two diagnostics for image quality and speed, which report facts rather than
 impressions:
 
 ```bash
-# What resolution is the preview pane actually receiving?
+# Is the pane receiving each file's whole image, or a proxy?
 dist/Sandglass.app/Contents/MacOS/Sandglass --inspect ~/Pictures/Wedding
 
 # How long does opening a folder and moving through it really take?
@@ -300,8 +315,8 @@ what makes a viewer feel slow. What matters is not asking for the wrong thing:
   calls behind one actor.
 - **Lazy bitmap realisation.** Thumbnails are created without forcing an
   immediate full decode, so a tile that scrolls past never pays for one.
-- **Zooming sharpens on demand.** A heavier decode is only requested once you
-  actually zoom in, where the extra pixels are visible.
+- **Zooming is already sharp.** Because the pane always holds a native decode,
+  zooming magnifies real pixels with nothing further to fetch.
 
 Measured on a 24 MP shoot: folder open 18 ms, average preview 42 ms.
 
