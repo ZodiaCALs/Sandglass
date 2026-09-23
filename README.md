@@ -98,8 +98,9 @@ dist/Sandglass.app/Contents/MacOS/Sandglass ~/Pictures/Wedding
 | `B` | Flag both JPG and NEF |
 | `1` / `2` | Flag only the JPG / only the NEF |
 | `+` `−` `0` | Zoom in / out / reset |
-| Mouse wheel | Zoom about the pointer |
-| Pinch, or ⌘-scroll | Zoom on a trackpad |
+| Mouse wheel | Zoom about the pointer (no modifier needed) |
+| Pinch | Zoom about the pointer |
+| ⌘-scroll | Also zooms, if you prefer |
 | Two-finger scroll / drag | Pan while zoomed in |
 | Double-click | Toggle fit ↔ 2× |
 | Pinch / ⌘-scroll | Zoom about the pointer |
@@ -136,6 +137,13 @@ out to matter:
 - **Faster, as well as sharper.** Bypassing the thumbnail path took the average
   from ~95 ms to under 10 ms per photo, because the system no longer decodes and
   resamples synchronously.
+- **Portrait photos are the right way up.** Cameras store a vertical photo
+  sideways and record the rotation in an EXIF tag, which a direct decode ignores.
+  Sandglass applies it, verified against Apple's own orientation handling for all
+  eight EXIF values. A quarter turn applied the wrong way still looks plausibly
+  shaped, so only a pixel-for-pixel comparison catches it — which is how an
+  upside-down portrait slipped through until now. The rotation is pixel-exact and
+  preserves the colour space.
 - **No colour management surprises.** Pixels are decoded in the file's own colour
   space and drawn without filters, tint, saturation changes or blend modes.
 - **Zoom magnifies real pixels**, because what is on screen is already the whole
@@ -146,7 +154,15 @@ out to matter:
   12000 px on the long edge are scaled on decode so an extreme scan cannot
   exhaust memory.
 
-## Background
+## Layout
+
+The header's layout button switches where the filmstrip sits, and the choice is
+remembered:
+
+- **Left** or **Right** — two tiles across, down the side of the photo
+- **Photo only** — no filmstrip; just the photo
+
+## Background## Background
 
 The **◐** button in the header (or `B`) opens the background picker:
 
@@ -228,7 +244,7 @@ SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.cache/module" \
 swift test --disable-sandbox --cache-path "$PWD/.cache/swiftpm"
 ```
 
-52 tests cover variant detection, pairing (including the cases above), flag
+58 tests cover variant detection, pairing (including the cases above), flag
 semantics, export planning, and real files on disk — scanning a folder, copying
 exactly the flagged variants, moving them out of the source, and refusing to
 overwrite an existing file. Previews are decoded from real files, including a

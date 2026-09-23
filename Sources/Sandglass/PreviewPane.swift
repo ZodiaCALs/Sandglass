@@ -9,26 +9,45 @@ struct Toast: Equatable, Identifiable {
 
 /// Shared state for the zoom controls.
 ///
-/// The canvas owns the zoom while a gesture is running — driving it from SwiftUI
-/// state is what made zooming lag. SwiftUI only *reads* the value and sends
-/// deliberate changes (slider, buttons, keyboard) back through here.
+/// The canvas owns the framing while a gesture is running — routing every frame
+/// through SwiftUI is what made zooming lag. This class mirrors the value so
+/// controls can display it and send deliberate changes back.
 @MainActor
 final class ZoomBridge: ObservableObject {
-    @Published var level: CGFloat = 1
+    /// Current magnification, kept in step with the canvas.
+    ///
+    /// This is the value the readout renders, so it is updated both when a
+    /// gesture changes the zoom and when a control asks for a new one. Relying on
+    /// the canvas to report back alone left the readout stale.
+    @Published private(set) var level: CGFloat = 1
+
     weak var canvas: ImageCanvasView?
 
+    /// Ask the canvas to change zoom, and record the result immediately.
     func setFromUI(_ value: CGFloat) {
-        canvas?.setZoomFromUI(value)
+        GestureTrace.log("bridge.setFromUI(\(value)) canvasAttached=\(canvas != nil)")
+        guard let canvas else {
+            report(value)
+            return
+        }
+        canvas.setZoomFromUI(value)
+        // Read the canvas back rather than assuming: it clamps, and a gesture may
+        // have moved it since. This is what keeps the readout truthful.
+        report(canvas.zoom)
     }
 
+    /// Accept a value from the canvas.
     func report(_ value: CGFloat) {
-        if abs(level - value) > 0.001 { level = value }
+        GestureTrace.log("bridge.report(\(value)) current=\(level)")
+        guard value.isFinite, abs(level - value) > 0.0005 else { return }
+        level = value
     }
 
-    /// Remember the live canvas so controls can drive it directly. Weak: the
-    /// view hierarchy owns it.
+    /// Remember the live canvas so controls can drive it directly. Weak: the view
+    /// hierarchy owns it.
     func attach(canvas: ImageCanvasView) {
         self.canvas = canvas
+        report(canvas.zoom)
     }
 }
 
@@ -92,11 +111,18 @@ struct PreviewPane: View {
         .padding(6)
     }
 
+    /// A small map for the navigator, kept separate from the full-resolution
+    /// preview so the navigator's redraws stay cheap while you zoom.
+    private var navigatorMap: CGImage? {
+        guard let shot else { return nil }
+        return model.navigatorImage(for: shot, kind: model.kind) ?? image
+    }
+
     /// Shown only while zoomed in, where knowing your position actually matters.
     @ViewBuilder
     private var navigator: some View {
-        if isZoomedIn, let image {
-            NavigatorView(image: image, region: visibleRegion) { point in
+        if isZoomedIn, let map = navigatorMap {
+            NavigatorView(image: map, region: visibleRegion) { point in
                 zoom.canvas?.centreOn(normalised: point)
             }
             .padding(14)
@@ -123,7 +149,10 @@ struct PreviewPane: View {
     private var canvas: some View {
         ImageCanvas(
             image: image,
+            // Only the photo identity resets the framing.
             resetToken: "\(shot?.id ?? "")|\(model.kind.rawValue)",
+            // The revision signals a replaced bitmap, which must not reset zoom.
+            bitmapRevision: model.previewRevision,
             onZoomChange: { level in
                 zoom.report(level)
                 // Reveal more detail only once the user actually zooms in.

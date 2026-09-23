@@ -221,7 +221,7 @@ actor ThumbnailLoader {
             [kCGImageSourceShouldCacheImmediately: true] as CFDictionary
         ) else { return nil }
 
-        guard orientation != 1, let rotated = applyOrientation(orientation, to: image) else {
+        guard orientation != 1, let rotated = Orient.apply(Int(orientation), to: image) else {
             return Thumbnail(
                 image: image,
                 pixelSize: CGSize(width: image.width, height: image.height)
@@ -231,41 +231,6 @@ actor ThumbnailLoader {
             image: rotated,
             pixelSize: CGSize(width: rotated.width, height: rotated.height)
         )
-    }
-
-    /// Apply an EXIF orientation to a decoded image.
-    private nonisolated static func applyOrientation(_ orientation: UInt32, to image: CGImage) -> CGImage? {
-        let swapsAxes = orientation >= 5
-        let width = swapsAxes ? image.height : image.width
-        let height = swapsAxes ? image.width : image.height
-
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else { return nil }
-
-        // Place the image so that the transform below lands it correctly.
-        var transform = CGAffineTransform.identity
-        switch orientation {
-        case 2: transform = CGAffineTransform(translationX: CGFloat(width), y: 0).scaledBy(x: -1, y: 1)
-        case 3: transform = CGAffineTransform(translationX: CGFloat(width), y: CGFloat(height)).scaledBy(x: -1, y: -1)
-        case 4: transform = CGAffineTransform(translationX: 0, y: CGFloat(height)).scaledBy(x: 1, y: -1)
-        case 5: transform = CGAffineTransform(a: 0, b: 1, c: 1, d: 0, tx: 0, ty: 0)
-        case 6: transform = CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: CGFloat(width), ty: 0)
-        case 7: transform = CGAffineTransform(a: 0, b: -1, c: -1, d: 0, tx: CGFloat(width), ty: CGFloat(height))
-        case 8: transform = CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: 0, ty: CGFloat(height))
-        default: transform = .identity
-        }
-
-        context.concatenate(transform)
-        context.interpolationQuality = .high
-        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        return context.makeImage()
     }
 
     /// Synchronous decode; always called from a detached context, never the main thread.

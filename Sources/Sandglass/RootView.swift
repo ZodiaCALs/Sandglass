@@ -18,6 +18,11 @@ struct RootView: View {
     @AppStorage("backgroundImageDim") private var backgroundImageDim = 0.35
     /// Stored as hex so the wheel selection survives relaunch.
     @AppStorage("backgroundCustomHex") private var backgroundCustomHex = "#2B3550"
+    @AppStorage("layoutMode") private var layoutModeRaw = LayoutMode.filmstripLeft.rawValue
+
+    private var layoutMode: LayoutMode {
+        LayoutMode(rawValue: layoutModeRaw) ?? .filmstripLeft
+    }
     @StateObject private var backgroundImage = BackgroundImageLoader()
 
     private var backgroundMode: BackgroundMode {
@@ -56,6 +61,7 @@ struct RootView: View {
             VStack(spacing: 10) {
                 HeaderBar(
                     model: model,
+                    layoutModeRaw: $layoutModeRaw,
                     showingHelp: $showingHelp,
                     showingBackgroundPicker: $showingBackgroundPicker,
                     showingMetadata: $showingMetadata
@@ -145,16 +151,36 @@ struct RootView: View {
                 .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
                 .padding(10)
         } else {
-            HStack(spacing: 0) {
+            filmstripLayout
+        }
+    }
+
+    /// Arrange the filmstrip, photo and info panel according to the chosen layout.
+    @ViewBuilder
+    private var filmstripLayout: some View {
+        HStack(spacing: 0) {
+            if layoutMode == .photoOnly {
+                PreviewPane(model: model, zoom: zoom, toast: $toast)
+                metadataColumn
+            } else if layoutMode == .filmstripRight {
+                PreviewPane(model: model, zoom: zoom, toast: $toast)
+                metadataColumn
+                PhotoGridView(model: model)
+            } else {
                 PhotoGridView(model: model)
                 PreviewPane(model: model, zoom: zoom, toast: $toast)
-                if showingMetadata {
-                    MetadataPanel(model: model) {
-                        showingMetadata = false
-                    }
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
+                metadataColumn
             }
+        }
+    }
+
+    @ViewBuilder
+    private var metadataColumn: some View {
+        if showingMetadata {
+            MetadataPanel(model: model) {
+                showingMetadata = false
+            }
+            .transition(.move(edge: .trailing).combined(with: .opacity))
         }
     }
 

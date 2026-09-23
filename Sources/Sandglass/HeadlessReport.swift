@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import ImageIO
 
 /// Runs the full scan → flag → export path without a user interface.

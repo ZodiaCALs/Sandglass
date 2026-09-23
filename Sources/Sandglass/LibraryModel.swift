@@ -76,6 +76,14 @@ final class LibraryModel: ObservableObject {
     /// Native-resolution bitmap for the photo on screen. One entry only: these
     /// are large, and only the current photo needs one.
     private var previewImages: [String: CGImage] = [:]
+    /// Bumped whenever a preview bitmap is replaced.
+    ///
+    /// `CGImage` compares by reference, so telling the view "the image changed"
+    /// by passing the new value is not reliable: a struct holding the new image
+    /// can compare equal to itself and SwiftUI will skip the update, leaving the
+    /// softer prefetch on screen. This counter gives the view something that
+    /// always differs.
+    private(set) var previewRevision = 0
     /// Budget each entry in `previewImages` was decoded at, so a window resize
     /// knows to re-decode.
     private var previewBudgets: [String: Int] = [:]
@@ -314,7 +322,14 @@ final class LibraryModel: ObservableObject {
         if let image = previewImages[key], (previewBudgets[key] ?? 0) >= previewPixelBudget {
             return image
         }
-        return thumbnails[cacheKey(shot, variant, previewPixelBudget)]?.image
+        // A filmstrip tile is far too small to stand in for the photo. Accepting
+        // one here is what made a first open look blurred.
+        let minimum = max(previewPixelBudget / 2, ThumbnailLoader.tilePixel)
+        if let cached = thumbnails[cacheKey(shot, variant, previewPixelBudget)],
+           max(cached.pixelSize.width, cached.pixelSize.height) >= CGFloat(minimum) {
+            return cached.image
+        }
+        return nil
     }
 
     /// True once the whole file has been decoded — not a proxy, not a budget.
@@ -347,10 +362,37 @@ final class LibraryModel: ObservableObject {
         let decoded = previewImages[fileKey(shot, variant)]
         let sourceText = source.map { "\(Int($0.width))x\(Int($0.height))" } ?? "?"
         let decodedText = decoded.map { "\($0.width)x\($0.height)" } ?? "not decoded"
-        guard let decoded, let source else { return "file \(sourceText) -> \(decodedText)" }
+        guard let decoded, source != nil else { return "file \(sourceText) -> \(decodedText)" }
         let whole = isWholeImage(decoded, for: shot, kind: variant)
         return "file \(sourceText) -> \(decodedText)  \(whole ? "whole image" : "PARTIAL — a proxy, not the file")"
     }
+
+    /// A small rendition for the navigator map.
+    ///
+    /// The navigator re-renders while you zoom, so handing it a full-resolution
+    /// bitmap would make every frame expensive for no visible benefit at 132 pt.
+    func navigatorImage(for shot: Shot, kind variant: FileKind) -> CGImage? {
+        let key = cacheKey(shot, variant, Self.navigatorPixel)
+        if let cached = thumbnails[key] { return cached.image }
+        return nil
+    }
+
+    /// Ask for the navigator's small rendition if it is not loaded yet.
+    func requestNavigatorImage(for shot: Shot, kind variant: FileKind) {
+        let key = cacheKey(shot, variant, Self.navigatorPixel)
+        guard thumbnails[key] == nil, !loadingThumbnails.contains(key),
+              let url = shot.url(for: variant) else { return }
+        loadingThumbnails.insert(key)
+        Task {
+            let result = await ThumbnailLoader.shared.thumbnail(
+                for: url, maxPixel: Self.navigatorPixel, urgent: false)
+            self.loadingThumbnails.remove(key)
+            if let result { self.thumbnails[key] = result }
+        }
+    }
+
+    /// Long edge of the navigator's map.
+    nonisolated static let navigatorPixel = 320
 
     /// Hand the file to the system so the shot is still reachable when its
     /// preview cannot be rendered.
@@ -675,6 +717,8 @@ final class LibraryModel: ObservableObject {
             }
             self.previewImages[key] = result.image
             self.previewBudgets[key] = budget
+            self.previewRevision &+= 1
+            self.requestNavigatorImage(for: shot, kind: self.kind)
             self.objectWillChange.send()
         }
     }

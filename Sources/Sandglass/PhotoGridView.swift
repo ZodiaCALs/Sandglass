@@ -15,13 +15,13 @@ struct PhotoGridView: View {
     private static let tileGap: CGFloat = 8
     private static let contentInset: CGFloat = 10
 
-    /// Width of the whole strip: two tiles, the gap between them and the insets.
+    /// Width of a side strip: two tiles, the gap between them and the insets.
     static let stripWidth: CGFloat = tileWidth * 2 + tileGap + contentInset * 2
 
     var body: some View {
         VStack(spacing: 0) {
             ScrollViewReader { proxy in
-                ScrollView {
+                ScrollView(.vertical) {
                     LazyVGrid(
                         columns: Array(
                             repeating: GridItem(.fixed(Self.tileWidth), spacing: Self.tileGap),
@@ -81,6 +81,7 @@ private struct PhotoCell: View {
     let shot: Shot
     let isSelected: Bool
 
+    private let imageHeight: CGFloat = 106
     @State private var isHovering = false
 
     private var selection: FlagSelection { model.flagFor(shot) }
@@ -110,7 +111,7 @@ private struct PhotoCell: View {
                         .foregroundStyle(.tertiary)
                 }
             }
-            .frame(height: 106)
+            .frame(height: imageHeight)
             .clipped()
             .overlay(alignment: .topTrailing) {
                 if !selection.isEmpty {

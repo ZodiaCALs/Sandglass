@@ -3,9 +3,11 @@ import SwiftUI
 /// Title, folder picker, session progress and the export entry point.
 struct HeaderBar: View {
     @ObservedObject var model: LibraryModel
+    @Binding var layoutModeRaw: String
     @Binding var showingHelp: Bool
     @Binding var showingBackgroundPicker: Bool
     @Binding var showingMetadata: Bool
+    @State private var showingLayoutPicker = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -26,6 +28,8 @@ struct HeaderBar: View {
                     text: "\(model.flaggedFileCount) file\(model.flaggedFileCount == 1 ? "" : "s")"
                 )
             }
+
+            layoutPicker
 
             GlassIconButton(
                 systemName: "circle.lefthalf.filled",
@@ -74,6 +78,63 @@ struct HeaderBar: View {
             Text("Sandglass")
                 .font(.system(size: 15, weight: .semibold, design: .rounded))
         }
+    }
+
+    /// Choose where the filmstrip sits.
+    ///
+    /// A popover rather than a menu, so the current mode is visible at a glance
+    /// and switching is one click.
+    private var layoutPicker: some View {
+        Button {
+            showingLayoutPicker.toggle()
+        } label: {
+            Image(systemName: selectedLayout.systemImage)
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 34, height: 34)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .glassEffect(.regular.interactive(), in: Circle())
+        .help("Layout: \(selectedLayout.label) — click to change")
+        .popover(isPresented: $showingLayoutPicker, arrowEdge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Layout")
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                ForEach(LayoutMode.allCases) { mode in
+                    Button {
+                        layoutModeRaw = mode.rawValue
+                        showingLayoutPicker = false
+                    } label: {
+                        HStack(spacing: 9) {
+                            Image(systemName: mode.systemImage)
+                                .frame(width: 18)
+                            Text(mode.label)
+                                .font(.system(size: 12))
+                            Spacer(minLength: 12)
+                            if mode == selectedLayout {
+                                Image(systemName: "checkmark")
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                        .background(
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(mode == selectedLayout ? Color.accentColor.opacity(0.22) : .clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .help(mode.help)
+                }
+            }
+            .padding(14)
+            .frame(width: 190)
+        }
+    }
+
+    private var selectedLayout: LayoutMode {
+        LayoutMode(rawValue: layoutModeRaw) ?? .filmstripLeft
     }
 
     private var folderChip: some View {

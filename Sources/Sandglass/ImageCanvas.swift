@@ -14,6 +14,10 @@ struct ImageCanvas: NSViewRepresentable {
     let image: CGImage?
     /// Changes when a different photo is shown, so zoom can reset per photo.
     let resetToken: String
+    /// Changes when the bitmap for the *same* photo is replaced — a sharper decode
+    /// arriving after the prefetch. Distinct from `resetToken` so the framing is
+    /// preserved while the image sharpens.
+    var bitmapRevision: Int = 0
     /// Reports the zoom factor so the UI can display it. Display only — the
     /// canvas is the source of truth while a gesture is running.
     var onZoomChange: (CGFloat) -> Void = { _ in }
@@ -27,6 +31,7 @@ struct ImageCanvas: NSViewRepresentable {
 
     func makeNSView(context: Context) -> ImageCanvasView {
         let view = ImageCanvasView()
+        view.onZoomChanged = onZoomChange
         view.onViewportChanged = onViewportChange
         view.setImage(image, resetZoom: true)
         context.coordinator.token = resetToken
@@ -35,16 +40,29 @@ struct ImageCanvas: NSViewRepresentable {
     }
 
     func updateNSView(_ view: ImageCanvasView, context: Context) {
+        // Refresh both handlers: SwiftUI recreates these closures on every update,
+        // so keeping only the ones captured at creation can leave the zoom readout
+        // listening to a stale closure and appearing frozen.
+        view.onZoomChanged = onZoomChange
         view.onViewportChanged = onViewportChange
-        // Only reset the zoom when the photo itself changes, not on every
-        // unrelated SwiftUI update (which would fight the user's gestures).
+
         let isNewPhoto = context.coordinator.token != resetToken
+        let isNewBitmap = context.coordinator.revision != bitmapRevision
         context.coordinator.token = resetToken
-        view.setImage(image, resetZoom: isNewPhoto)
+        context.coordinator.revision = bitmapRevision
+
+        // Reset the framing only for a different photo. A sharper decode of the
+        // same photo swaps the pixels in place, so zoom is not disturbed. Passing
+        // the bitmap unconditionally also guarantees SwiftUI cannot skip the
+        // update when the image compares equal to itself.
+        if isNewPhoto || isNewBitmap {
+            view.setImage(image, resetZoom: isNewPhoto)
+        }
     }
 
     final class Coordinator {
         var token: String = ""
+        var revision: Int = -1
     }
 }
 
@@ -140,17 +158,68 @@ final class ImageCanvasView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func layout() {
-        super.layout()
-        if let scale = window?.backingScaleFactor, layer?.contentsScale != scale {
-            layer?.contentsScale = scale
-        }
-        recomputeFit()
-    }
+    // MARK: Event routing
 
+    private var eventMonitor: Any?
+
+    /// Watch for scroll and magnify events directly on the window.
+    ///
+    /// SwiftUI's hosting layer consumes scroll events in some configurations, so
+    /// relying on `scrollWheel(with:)` alone can leave wheel zoom silently dead.
+    /// The monitor fires first, and only acts when the pointer is actually over
+    /// this view, so nothing else in the app is affected.
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let scale = window?.backingScaleFactor {
+            layer?.contentsScale = scale
+        }
+        recomputeFit()
+        if window == nil {
+            removeEventMonitor()
+        } else {
+            installEventMonitor()
+        }
+    }
+
+    private func installEventMonitor() {
+        removeEventMonitor()
+        guard let window else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .magnify]) { [weak self] event in
+            guard let self, self.window === window else { return event }
+            // Only handle events that land on this view.
+            let point = self.convert(event.locationInWindow, from: nil)
+            guard self.bounds.contains(point) else { return event }
+
+            if event.type == .magnify {
+                GestureTrace.log("monitor magnify \(event.magnification)")
+                self.setZoom(self.zoom * (1 + event.magnification), anchor: point)
+            } else {
+                self.handleScroll(event, anchor: point, fromMonitor: true)
+            }
+            // Swallow it: the event was meant for the photo, and letting the
+            // hosting view see it again would double-apply the gesture.
+            return nil
+        }
+    }
+
+    private func removeEventMonitor() {
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+
+    /// The monitor is tied to the window, so it is installed and removed as the
+    /// view moves between windows rather than in `deinit`, which cannot touch
+    /// main-actor state.
+    override func removeFromSuperview() {
+        removeEventMonitor()
+        super.removeFromSuperview()
+    }
+
+    override func layout() {
+        super.layout()
+        if let scale = window?.backingScaleFactor, layer?.contentsScale != scale {
             layer?.contentsScale = scale
         }
         recomputeFit()
@@ -274,6 +343,7 @@ final class ImageCanvasView: NSView {
         )
 
         zoom = clamped
+        GestureTrace.log("setZoom -> \(zoom) willReport=\(onZoomChanged != nil)")
         let newScale = fitScale * zoom
         // Re-derive the centre so that same point maps back to the anchor.
         let candidate = CGPoint(
@@ -310,6 +380,7 @@ final class ImageCanvasView: NSView {
         guard size.width > 0, size.height > 0 else { return }
         centre = clampedCentre(CGPoint(x: point.x * size.width, y: point.y * size.height))
         applyTransform()
+        reportViewport()
     }
 
     /// Pan by a delta in view points.
@@ -341,15 +412,65 @@ final class ImageCanvasView: NSView {
         ).intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
     }
 
-    private func reportViewport() {
-        viewportTick &+= 1
-        onViewportChanged?(visibleRegion, viewportTick)
+    /// Report the visible region, at most a few times a second.
+    ///
+    /// This feeds SwiftUI state, and a pinch produces far more frames than the
+    /// navigator can usefully show. Reporting on every frame made the whole
+    /// preview pane re-render mid-gesture, which is felt as stutter.
+    private func reportViewport(force: Bool = false) {
+        let now = CACurrentMediaTime()
+        // The first report goes out immediately: making the navigator appear is
+        // worth more than the throttle, and it keeps the change observable
+        // without waiting on a timer.
+        if force || previousReport == 0 || now - lastViewportReport >= Self.viewportReportInterval {
+            pendingReport?.cancel()
+            pendingReport = nil
+            lastViewportReport = now
+            previousReport += 1
+            viewportTick &+= 1
+            onViewportChanged?(visibleRegion, viewportTick)
+            return
+        }
+
+        // Too soon to report again. Schedule the deferred one rather than
+        // dropping it, so the navigator always catches up — and a rapid sequence
+        // of changes still ends with a report that reflects the final state.
+        guard pendingReport == nil else { return }
+        let delay = Self.viewportReportInterval - (now - lastViewportReport)
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.pendingReport = nil
+            self.reportViewport(force: true)
+        }
+        pendingReport = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
     }
+
+    /// Send any deferred report immediately, so the navigator agrees with the
+    /// canvas the moment a gesture stops.
+    private func flushPendingViewportReport() {
+        reportViewport(force: true)
+    }
+
+    /// Force the pending report out now. Used when a gesture ends, and by tests
+    /// that cannot wait for the throttle timer.
+    func flushViewportReports() {
+        reportViewport(force: true)
+    }
+
+    private static let viewportReportInterval: CFTimeInterval = 1.0 / 25.0
+    private var lastViewportReport: CFTimeInterval = 0
+    private var previousReport = 0
+    private var pendingReport: DispatchWorkItem?
 
     // MARK: Events
 
     override func scrollWheel(with event: NSEvent) {
-        let anchor = convert(event.locationInWindow, from: nil)
+        handleScroll(event, anchor: convert(event.locationInWindow, from: nil), fromMonitor: false)
+    }
+
+    private func handleScroll(_ event: NSEvent, anchor: CGPoint, fromMonitor: Bool) {
+        GestureTrace.log("scroll precision=\(event.hasPreciseScrollingDeltas) dy=\(event.scrollingDeltaY) mag=\(event.value(forKey: magnificationKey) as? CGFloat ?? 0) monitor=\(fromMonitor)")
 
         // A trackpad pinch arrives as a scroll event carrying `magnification`.
         if let magnification = event.value(forKey: magnificationKey) as? CGFloat,
@@ -364,6 +485,7 @@ final class ImageCanvasView: NSView {
             modifierFlags: event.modifierFlags
         ) else { return }
 
+        GestureTrace.log("  -> action \(action)")
         switch action {
         case .zoom(let factor):
             setZoom(zoom * factor, anchor: anchor)
@@ -403,6 +525,7 @@ final class ImageCanvasView: NSView {
     }
 
     override func magnify(with event: NSEvent) {
+        GestureTrace.log("magnify \(event.magnification)")
         setZoom(
             zoom * (1 + event.magnification),
             anchor: convert(event.locationInWindow, from: nil)

@@ -1036,8 +1036,8 @@ struct RenderedSharpnessTests {
         )
     }
 
-    @Test("Every viewport change carries a new tick")
-    func viewportTickAdvances() throws {
+    @Test("Viewport reports are throttled but always catch up")
+    func viewportReportsThrottleAndCatchUp() throws {
         let side = 600
         let pane = CGSize(width: 800, height: 600)
         let canvas = ImageCanvasView()
@@ -1046,29 +1046,42 @@ struct RenderedSharpnessTests {
         canvas.layout()
 
         var ticks: [Int] = []
-        var widthsByZoom: [CGFloat: CGFloat] = [:]
+        var widths: [CGFloat] = []
         canvas.onViewportChanged = { region, tick in
             ticks.append(tick)
-            widthsByZoom[canvas.zoom] = region.width
+            widths.append(region.width)
         }
 
-        canvas.setZoomFromUI(2)
-        canvas.setZoomFromUI(4)
-        canvas.resetZoom()
+        // A pinch produces far more changes than the navigator needs to see.
+        // Reporting every one made the pane re-render mid-gesture, so reports are
+        // rate limited; the important part is that the final state always lands.
+        for step in 1...30 {
+            canvas.setZoom(anchor: CGPoint(x: 600, y: 450), value: 1 + CGFloat(step) * 0.1)
+        }
+        canvas.flushViewportReports()
 
-        #expect(ticks.count == 3, "expected one report per change, got \(ticks.count)")
-        // Strictly increasing, so a view comparing only the tick still redraws.
+        #expect(!ticks.isEmpty, "at least one report should be delivered")
+        #expect(ticks.count < 30, "reports should be throttled, got \(ticks.count) for 30 changes")
         #expect(ticks == ticks.sorted(), "ticks must increase: \(ticks)")
         #expect(Set(ticks).count == ticks.count, "ticks must be unique: \(ticks)")
 
-        // The region genuinely narrows as the photo is magnified, which is what
-        // the navigator rectangle draws.
-        let atFit = try #require(widthsByZoom[1], "fit should be reported")
-        let at2x = try #require(widthsByZoom[2], "2x should be reported")
-        let at4x = try #require(widthsByZoom[4], "4x should be reported")
-        #expect(atFit > at2x, "zooming in should shrink the visible region")
-        #expect(at2x > at4x, "zooming further in should shrink it again")
-        #expect(abs(atFit - 1.0) < 0.001, "at fit the whole photo is visible")
+        // The last report must describe where the canvas actually ended up.
+        let zoomedIn = try #require(widths.last)
+        #expect(zoomedIn < 0.5, "after zooming in the region should be small, got \(zoomedIn)")
+
+        // And returning to fit must be reported too.
+        canvas.resetZoom()
+        canvas.flushViewportReports()
+        let fitted = try #require(widths.last)
+        #expect(abs(fitted - 1.0) < 0.001, "fit should report the whole photo, got \(fitted)")
+    }
+
+    @Test("The navigator is handed a small map, not the full-resolution photo")
+    func navigatorUsesSmallMap() async throws {
+        // The navigator redraws while zooming, so it must not draw a huge bitmap.
+        #expect(LibraryModel.navigatorPixel <= 512,
+                "the navigator map should stay small, got \(LibraryModel.navigatorPixel)px")
+        #expect(LibraryModel.navigatorPixel < ThumbnailLoader.maximumPreviewPixel)
     }
 
     @Test("The photo can never be panned out of view")
