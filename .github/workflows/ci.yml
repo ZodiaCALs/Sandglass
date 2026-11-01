@@ -1,0 +1,47 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build, test & package (macOS 26)
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          sw_vers
+          ls -d /Applications/Xcode*.app || true
+          xcodebuild -version
+          swift --version
+
+      - name: Build
+        run: swift build --configuration debug
+
+      - name: Test
+        run: swift test --parallel
+
+      - name: Assemble app
+        run: ./Scripts/build-app.sh release
+
+      - name: Package
+        run: |
+          ditto -c -k --keepParent dist/Sandglass.app dist/Sandglass-app.zip
+          ls -la dist
+
+      - name: Upload app
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sandglass-app
+          path: dist/Sandglass-app.zip
+          if-no-files-found: error
