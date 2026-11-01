@@ -45,3 +45,15 @@ jobs:
           name: Sandglass-app
           path: dist/Sandglass-app.zip
           if-no-files-found: error
+
+  core-linux:
+    name: Core tests (Linux)
+    runs-on: ubuntu-latest
+    container: swift:6.2-noble
+    timeout-minutes: 20
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Test the platform-independent core
+        run: swift test

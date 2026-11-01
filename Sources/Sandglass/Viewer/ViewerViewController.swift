@@ -185,7 +185,7 @@ final class ViewerViewController: NSViewController {
                 canvas.setImage(
                     bitmap.cgImage,
                     logicalSize: bitmap.sourceSize,
-                    allPixels: bitmap.isFullResolution,
+                    allPixels: Self.showsRealPixels(bitmap),
                     resetFraming: isNewPhoto
                 )
             }
@@ -216,6 +216,12 @@ final class ViewerViewController: NSViewController {
         return density > threshold ? full : display
     }
 
+    /// Real pixels are magnified crisply; a stand-in thumbnail (all ImageIO could
+    /// offer for a raw without a usable preview) is smoothed instead of blocky.
+    private static func showsRealPixels(_ bitmap: DecodedImage) -> Bool {
+        bitmap.isFullResolution && bitmap.origin != .system
+    }
+
     /// Device pixels per pixel of `bitmap` at the canvas's current zoom.
     private func displayDensity(of bitmap: DecodedImage, on canvas: ImageCanvasView) -> CGFloat {
         let viewport = canvas.viewport
@@ -230,7 +236,7 @@ final class ViewerViewController: NSViewController {
         if let slot = slot(for: canvas) {
             // Swap between the screen-sized rendition and every pixel as zoom crosses over.
             if let preferred = preferredBitmap(for: slot, on: canvas), preferred.cgImage !== canvas.image, canvas.image != nil {
-                canvas.setImage(preferred.cgImage, logicalSize: preferred.sourceSize, allPixels: preferred.isFullResolution, resetFraming: false)
+                canvas.setImage(preferred.cgImage, logicalSize: preferred.sourceSize, allPixels: Self.showsRealPixels(preferred), resetFraming: false)
                 return
             }
             // Zoomed past what the rendition holds: fetch the real pixels.

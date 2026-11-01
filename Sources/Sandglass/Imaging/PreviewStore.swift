@@ -74,9 +74,11 @@ final class PreviewStore {
     }
 
     init() {
+        // Enough for the photo, both neighbours each way and the other variant;
+        // about 1/48 of RAM, between 128 MB and 320 MB.
         let physical = Double(ProcessInfo.processInfo.physicalMemory)
-        let displayBudget = Int(min(max(physical / 24, 192 * 1_048_576), 640 * 1_048_576))
-        displayCache = LRUCache(costLimit: displayBudget, countLimit: 24)
+        let displayBudget = Int(min(max(physical / 48, 128 * 1_048_576), 320 * 1_048_576))
+        displayCache = LRUCache(costLimit: displayBudget, countLimit: 8)
         fullCache = LRUCache(costLimit: 900 * 1_048_576, countLimit: 2)
     }
 

@@ -10,6 +10,7 @@ import AppKit
 /// hairline stroke for grouped content, a gentle hover highlight on everything
 /// clickable, a clear four-step type ramp, and an accent-coloured focus ring
 /// around the selection.
+@MainActor
 enum Theme {
 
     // MARK: Colour
