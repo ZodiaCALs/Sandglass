@@ -39,6 +39,7 @@ engine.
 - **Flags are remembered** per folder between launches (Settings can turn this off).
 - **A new icon:** one piece of clear glass — a single, unbroken silhouette line on
   a porcelain tile, with only a thread of sand and the thin layer it settles into.
+  
 
 ## What it does
 
@@ -156,32 +157,6 @@ resolution-independent terms — a magnification on top of fit, and the normalis
 point of the photo at the centre of the pane — and derives everything else. It is
 pure Swift and covered by tests that run on any platform.
 
-Bugs fixed by the rewrite:
-
-- **Wheel zoom ran backwards** for anyone using natural scrolling (the macOS
-  default), and a fast flick could produce a zero or negative zoom factor. Zoom
-  now follows the physical direction and every step is a bounded, multiplicative
-  factor, so zooming in and out by the same amount returns exactly to the start.
-- **The photo jumped when the sharper bitmap arrived.** The old centre was stored
-  in pixels of the *previous* bitmap. The framing is now resolution-independent.
-- **Resizing the window or toggling a panel reset the zoom**, flashed a spinner and
-  re-decoded the whole file. Now the magnification and centre are kept (at 100% you
-  stay at 100%) and nothing is re-decoded.
-- **Scrolling in a sheet or popover zoomed the photo behind it** — a global event
-  monitor ignored which window an event belonged to. The canvas now receives events
-  the normal AppKit way.
-- **The navigator lagged and misled.** Its rectangle was fed through throttled
-  SwiftUI state, it was covered by the "loading full resolution" chip, grabbing the
-  rectangle made it jump under the pointer, and panoramas were cropped so the
-  rectangle sat on the wrong region. The navigator is now drawn with layers and
-  updated on every frame, keeps the photo's exact aspect ratio, remembers where you
-  grabbed it, shades everything outside the visible region, and moves above the
-  control bar if the window is too narrow for both.
-- **Aliasing at fit**: a full-resolution bitmap was shrunk with nearest-neighbour
-  filtering. At fit the screen-sized rendition (downsampled by ImageIO) is shown;
-  every pixel is swapped in once zoom magnifies past it, drawn crisply with
-  nearest-neighbour so 100% and beyond show real pixels.
-
 ## Why it is fast
 
 - **Decode to the size on screen.** ImageIO scales JPEGs while decoding (in the DCT
@@ -230,100 +205,3 @@ Pairing is by **base name, case-insensitively**: `DSC_0001.JPG` and `dsc_0001.ne
 are one shot. Numeric suffixes are not folded together — `DSC_0002-2.NEF` is its
 own shot, and `IMG_1` and `IMG_10` stay separate. Managed extensions are `jpg`,
 `jpeg` and `nef`; other formats are ignored, and only the chosen folder is scanned.
-
-## Project layout
-
-```
-Sources/Sandglass/
-  Core/           platform-independent: builds and is tested on Linux too
-    Shot.swift              file kinds, flags, shots, pairing, folder scanning
-    Library.swift           the culling session (@Observable): navigation, flags, sessions
-    Exporter.swift          export planning and the off-main copy/move engine
-    Viewport.swift          zoom/pan geometry behind the canvas and navigator
-    ZoomInput.swift         scroll-wheel, trackpad and pinch interpretation
-    NavigatorGeometry.swift navigator mapping and drag behaviour
-    RawPreviewLocator.swift finds embedded JPEG previews inside NEF/TIFF files
-    LRUCache.swift          cost-bounded LRU cache
-    Commands.swift          commands, layouts, the key map and shortcut reference
-    SessionStore.swift      remembers flags and position per folder
-    AppSettings.swift       preferences (@Observable, UserDefaults)
-    ObservationLoop.swift   lets AppKit controllers follow @Observable state
-    Formatting.swift        percentages, shutter speeds, sizes…
-  Imaging/        ImageIO decoding, preview/thumbnail/metadata stores
-  Viewer/         the canvas, navigator and photo pane
-  Browser/        the NSCollectionView thumbnail browser
-  Window/         window controller, toolbar, split view, layouts, backdrop
-  Interface/      SwiftUI: design system, control bar, inspector, export, settings
-  App/            entry point, app delegate, menus, key routing
-  Diagnostics/    --report / --inspect / --bench
-Tests/SandglassTests/
-  Core/           runs on macOS and Linux
-  App/            decoding, orientation, canvas rendering, preview pipeline, metadata
-Tests/Fixtures/   a sample shoot, orientation fixtures, synthetic NEFs (+ generator)
-Resources/Icon/   the icon's SVG sources and a 1024 px preview
-Scripts/          build-app.sh, make-dmg.sh, make-icon.py
-```
-
-## App icon
-
-The icon is designed as SVG (`Resources/Icon/Sandglass.svg`, plus a bolder
-`Sandglass-small.svg` for 16–64 px) and packed into `Resources/Sandglass.icns`,
-which is committed. To regenerate it:
-
-```bash
-python3 -m pip install --user --only-binary=:all: resvg-py
-```
-
-```bash
-python3 Scripts/make-icon.py
-```
-
-The output is deterministic, and the script verifies the `.icns` it writes. The
-tile follows Apple's icon grid (an 824 px continuous-corner squircle on a 1024 px
-canvas, with the standard shadow).
-
-## Verification
-
-On a Mac:
-
-```bash
-swift test
-```
-
-The core suite also runs on Linux (`swift test` there builds just `Core/`). It
-covers pairing, flags, export planning and real copy/move/no-overwrite on disk,
-the culling session (navigation, variant fallback, flag rules, session
-persistence, reload), the viewport (fit, anchored zoom, drift, resizing, bitmap
-swaps, pan bounds, zoom steps), scroll interpretation (wheel direction under
-natural scrolling, bounded factors), navigator geometry, the NEF preview locator
-(including big-endian files, maker-note previews, corrupt lengths, truncated files
-and a fuzz test), the LRU cache, the key map and settings.
-
-The macOS suite decodes real files — including a genuine Nikon NEF and synthetic
-NEFs with embedded previews, checked pixel by pixel for orientation — compares
-orientation handling with Apple's, renders the canvas through its layer tree to
-prove that zoom magnifies real pixels with no smoothing, that a sharper bitmap
-replaces a softer one without moving, and that resizing keeps the framing, and runs
-the preview pipeline end to end.
-
-CI (`.github/workflows/ci.yml`) builds, tests and packages the app on a macOS 26
-runner on every push and uploads `Sandglass.app` as an artifact.
-
-Diagnostics that report facts about a folder of your own:
-
-```bash
-dist/Sandglass.app/Contents/MacOS/Sandglass --report ~/Pictures/Wedding
-```
-
-```bash
-dist/Sandglass.app/Contents/MacOS/Sandglass --inspect ~/Pictures/Wedding
-```
-
-```bash
-dist/Sandglass.app/Contents/MacOS/Sandglass --bench ~/Pictures/Wedding
-```
-
-`--report` runs scan → flag → export into a temporary folder and verifies what
-landed; `--inspect` shows what each file decodes to (screen-sized and full), from
-where (JPEG, camera preview, raw decode) and how long it took; `--bench` times cold
-decodes at the sizes the app requests.
