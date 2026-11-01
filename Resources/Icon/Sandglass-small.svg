@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sandglass app icon: small-size variant, used for the 16, 32 and 64 px
+  renditions (see Scripts/make-icon.py).
+
+  The same tile, palette and hourglass as Sandglass.svg, simplified so the
+  silhouette survives at a dozen pixels:
+    - the hourglass is a little larger (62 % of the tile) with fuller bulbs,
+      a wider neck and thicker caps;
+    - the glass is frosted (a light translucent fill) instead of clear, so the
+      two bulbs and the pinched waist separate from the dark tile;
+    - no collars, glows, hairlines or soft shadows, which only blur at this
+      scale;
+    - the main edges sit on the 32 px grid (multiples of 32 units).
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Sandglass (small)</title>
+  <defs>
+    <!-- Tile: identical to Sandglass.svg (824 x 824 at 100,100, continuous corners r = 185.4). -->
+    <path id="tile-shape" d="
+      M383.41,100
+      L640.59,100 C722.19,100 763,100 799.79,112.14 L806.92,113.89 C854.88,131.34 892.66,169.12 910.11,217.08 L911.86,224.21 C924,261 924,301.81 924,383.41
+      L924,640.59 C924,722.19 924,763 911.86,799.79 L910.11,806.92 C892.66,854.88 854.88,892.66 806.92,910.11 L799.79,911.86 C763,924 722.19,924 640.59,924
+      L383.41,924 C301.81,924 261,924 224.21,911.86 L217.08,910.11 C169.12,892.66 131.34,854.88 113.89,806.92 L112.14,799.79 C100,763 100,722.19 100,640.59
+      L100,383.41 C100,301.81 100,261 112.14,224.21 L113.89,217.08 C131.34,169.12 169.12,131.34 217.08,113.89 L224.21,112.14 C261,100 301.81,100 383.41,100
+      Z"/>
+    <clipPath id="tile-clip"><use href="#tile-shape"/></clipPath>
+
+    <!-- Glass outline, symmetric about x = 512 and y = 512: shoulder half-width
+         132, widest 152 at y 344, neck 40 units wide. -->
+    <path id="glass-shape" d="
+      M380,300 L644,300
+      C656,304 664,322 664,344  C664,418 532,460 532,512
+      C532,564 664,606 664,680  C664,702 656,720 644,724
+      L380,724
+      C368,720 360,702 360,680  C360,606 492,564 492,512
+      C492,460 360,418 360,344  C360,322 368,304 380,300 Z"/>
+    <clipPath id="glass-clip"><use href="#glass-shape"/></clipPath>
+
+    <!-- Tile paint: the same gradient as the large icon, with less overhead
+         sheen so the top cap keeps its contrast. -->
+    <linearGradient id="tile-base" gradientUnits="userSpaceOnUse" x1="412" y1="100" x2="612" y2="924">
+      <stop offset="0" stop-color="#3C3792"/>
+      <stop offset="0.45" stop-color="#1F225E"/>
+      <stop offset="1" stop-color="#090C2A"/>
+    </linearGradient>
+    <radialGradient id="tile-sheen" gradientUnits="userSpaceOnUse" cx="512" cy="110" r="620">
+      <stop offset="0" stop-color="#A397FF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#A397FF" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Frosted glass, lit from the left. -->
+    <linearGradient id="glass-body" gradientUnits="userSpaceOnUse" x1="360" y1="0" x2="664" y2="0">
+      <stop offset="0" stop-color="#E8EDFF" stop-opacity="0.62"/>
+      <stop offset="0.3" stop-color="#E8EDFF" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#E8EDFF" stop-opacity="0.30"/>
+    </linearGradient>
+    <linearGradient id="sand-fill" gradientUnits="userSpaceOnUse" x1="0" y1="380" x2="0" y2="742">
+      <stop offset="0" stop-color="#FFDB86"/>
+      <stop offset="1" stop-color="#F09A2A"/>
+    </linearGradient>
+    <linearGradient id="cap-fill" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF2D8"/>
+      <stop offset="0.5" stop-color="#E8C894"/>
+      <stop offset="1" stop-color="#B38A55"/>
+    </linearGradient>
+
+    <filter id="tile-shadow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="12"/>
+      <feOffset dy="12"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>
+    </filter>
+  </defs>
+
+  <use id="tile-drop-shadow" href="#tile-shape" fill="#000" filter="url(#tile-shadow)"/>
+  <g id="tile" clip-path="url(#tile-clip)">
+    <use href="#tile-shape" fill="url(#tile-base)"/>
+    <use href="#tile-shape" fill="url(#tile-sheen)"/>
+  </g>
+
+  <g id="hourglass">
+    <use id="glass-back" href="#glass-shape" fill="url(#glass-body)"/>
+    <g id="sand" clip-path="url(#glass-clip)" fill="url(#sand-fill)">
+      <path d="M340,392 Q512,448 684,392 L684,512 L340,512 Z"/>
+      <path d="M340,664 C432,660 478,606 512,600 C546,606 592,660 684,664 L684,740 L340,740 Z"/>
+      <rect x="504" y="500" width="16" height="106"/>
+    </g>
+    <!-- Reflection down the left of the top bulb, and a light glass edge. -->
+    <path d="M384,320 C378,334 378,350 378,368 C378,396 392,418 412,436 C400,414 394,392 394,368 C394,350 396,334 400,320 Z" fill="#fff" fill-opacity="0.5" clip-path="url(#glass-clip)"/>
+    <use id="glass-edge" href="#glass-shape" fill="none" stroke="#fff" stroke-opacity="0.55" stroke-width="8"/>
+    <g id="caps" fill="url(#cap-fill)">
+      <rect x="336" y="256" width="352" height="48" rx="14"/>
+      <rect x="336" y="720" width="352" height="48" rx="14"/>
+    </g>
+  </g>
+</svg>
