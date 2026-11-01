@@ -37,7 +37,8 @@ engine.
 - **Rebuilt zoom and navigator.** See [Zoom and the navigator](#zoom-and-the-navigator)
   for the bugs that were fixed.
 - **Flags are remembered** per folder between launches (Settings can turn this off).
-- **A new icon:** a translucent glass hourglass on an indigo tile.
+- **A new icon:** one piece of clear glass — a single, unbroken silhouette line on
+  a porcelain tile, with only a thread of sand and the thin layer it settles into.
 
 ## What it does
 
