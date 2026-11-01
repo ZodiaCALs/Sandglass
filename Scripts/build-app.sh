@@ -49,10 +49,16 @@ mkdir -p "$APP_DIR/Contents/MacOS" "$APP_DIR/Contents/Resources"
 cp "$BINARY" "$APP_DIR/Contents/MacOS/$APP_NAME"
 cp "$ROOT/Resources/Info.plist" "$APP_DIR/Contents/Info.plist"
 
-# The icon is drawn in code; regenerate it if it is missing.
+# The icon is generated from Resources/Icon/Sandglass.svg and committed as an
+# .icns; regenerate it if it has gone missing.
 if [[ ! -f "$ROOT/Resources/$APP_NAME.icns" ]]; then
     echo "==> Generating app icon"
-    "$ROOT/Scripts/make-icon.sh"
+    python3 "$ROOT/Scripts/make-icon.py" || {
+        echo "error: Resources/$APP_NAME.icns is missing and could not be generated." >&2
+        echo "       Install the renderer with:" >&2
+        echo "       python3 -m pip install --user --only-binary=:all: resvg-py" >&2
+        exit 1
+    }
 fi
 cp "$ROOT/Resources/$APP_NAME.icns" "$APP_DIR/Contents/Resources/$APP_NAME.icns"
 
