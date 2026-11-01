@@ -1,0 +1,303 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Sandglass app icon: design source of truth.
+
+  Canvas  1024 x 1024, transparent outside the tile.
+  Tile    macOS icon grid: an 824 x 824 rounded square at (100,100) with
+          continuous-curvature ("squircle") corners, r = 185.4, plus the
+          standard soft drop shadow inside the margin (y +12, blur 24, 30 % black).
+  Hero    A slim glass hourglass, ~61 % of the tile height: clear bulbs that
+          show the background through them, crisp rim light on the left/top and
+          a softer edge on the right/bottom, champagne-gold caps, warm amber
+          sand and a fine glowing stream through the neck.
+  Light   Key light from the top-left; shadows fall straight down.
+
+  The 16, 32 and 64 px renditions come from Sandglass-small.svg, a bolder
+  simplification of this drawing. Regenerate Resources/Sandglass.icns with:
+      python3 Scripts/make-icon.py
+-->
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>Sandglass</title>
+  <defs>
+    <!-- ================================================================== -->
+    <!-- Geometry                                                           -->
+    <!-- ================================================================== -->
+
+    <!-- Tile. Each line is one edge plus the following corner, using Apple's
+         continuous-corner construction (curve, line, near-circular arc, line,
+         curve) mirrored about the corner diagonal; the curvature starts
+         1.528 r = 283.4 px from each corner. -->
+    <path id="tile-shape" d="
+      M383.41,100
+      L640.59,100 C722.19,100 763,100 799.79,112.14 L806.92,113.89 C854.88,131.34 892.66,169.12 910.11,217.08 L911.86,224.21 C924,261 924,301.81 924,383.41
+      L924,640.59 C924,722.19 924,763 911.86,799.79 L910.11,806.92 C892.66,854.88 854.88,892.66 806.92,910.11 L799.79,911.86 C763,924 722.19,924 640.59,924
+      L383.41,924 C301.81,924 261,924 224.21,911.86 L217.08,910.11 C169.12,892.66 131.34,854.88 113.89,806.92 L112.14,799.79 C100,763 100,722.19 100,640.59
+      L100,383.41 C100,301.81 100,261 112.14,224.21 L113.89,217.08 C131.34,169.12 169.12,131.34 217.08,113.89 L224.21,112.14 C261,100 301.81,100 383.41,100
+      Z"/>
+    <clipPath id="tile-clip"><use href="#tile-shape"/></clipPath>
+
+    <!-- Glass outline, symmetric about x = 512 and y = 512. Hourglass parts
+         are drawn in design units around the canvas centre and the whole
+         group is scaled 1.04x below. From the shoulder under the collar
+         (half-width 96) the bulb swells to its widest point (half-width 118,
+         y 372), then an S-curve narrows it to the 14-unit neck at y 512. The
+         lower bulb mirrors it. The flat top and bottom edges hide under the
+         collars. -->
+    <path id="glass-shape" d="
+      M416,296 L608,296
+      C620,302 630,340 630,372  C630,428 519,466 519,512
+      C519,558 630,596 630,652  C630,684 620,722 608,728
+      L416,728
+      C404,722 394,684 394,652  C394,596 505,558 505,512
+      C505,466 394,428 394,372  C394,340 404,302 416,296 Z"/>
+    <clipPath id="glass-clip"><use href="#glass-shape"/></clipPath>
+    <!-- The glass interior: the outline minus a 5-unit wall, so the sand sits
+         inside the glass rather than touching its outer surface. -->
+    <mask id="glass-inside" maskUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <use href="#glass-shape" fill="#fff" stroke="#000" stroke-width="10"/>
+    </mask>
+
+    <!-- Sand: a shallow funnel left in the top bulb (draining towards the
+         neck) and a soft cone piled in the bottom bulb. Both are clipped to the
+         glass interior, so only their top surfaces need drawing. -->
+    <path id="sand-top-shape" d="M380,398 Q512,462 644,398 L644,512 L380,512 Z"/>
+    <path id="sand-bottom-shape" d="M380,672 C440,668 478,610 512,604 C546,610 584,668 644,672 L644,740 L380,740 Z"/>
+    <path id="sand-top-crest" d="M380,398 Q512,462 644,398"/>
+    <path id="sand-bottom-crest" d="M380,672 C440,668 478,610 512,604 C546,610 584,668 644,672"/>
+
+    <!-- Caps: thin champagne-gold discs, each with a narrower collar where the
+         glass is seated. -->
+    <rect id="cap-top" x="364" y="270" width="296" height="22" rx="8"/>
+    <rect id="cap-bottom" x="364" y="732" width="296" height="22" rx="8"/>
+    <rect id="collar-top" x="406" y="290" width="212" height="10" rx="3"/>
+    <rect id="collar-bottom" x="406" y="724" width="212" height="10" rx="3"/>
+
+    <!-- ================================================================== -->
+    <!-- Paint: tile                                                        -->
+    <!-- ================================================================== -->
+
+    <!-- Indigo-violet at the top, deepening to midnight navy. -->
+    <linearGradient id="tile-base" gradientUnits="userSpaceOnUse" x1="412" y1="100" x2="612" y2="924">
+      <stop offset="0" stop-color="#3C3792"/>
+      <stop offset="0.45" stop-color="#1F225E"/>
+      <stop offset="1" stop-color="#090C2A"/>
+    </linearGradient>
+    <!-- Soft overhead light. -->
+    <radialGradient id="tile-sheen" gradientUnits="userSpaceOnUse" cx="512" cy="110" r="620">
+      <stop offset="0" stop-color="#A397FF" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#A397FF" stop-opacity="0"/>
+    </radialGradient>
+    <!-- A faint pool of light that the hourglass stands in. -->
+    <radialGradient id="tile-pool" gradientUnits="userSpaceOnUse" cx="512" cy="500" r="330">
+      <stop offset="0" stop-color="#8C86FF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#8C86FF" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Inner edge light: bright along the top edge, a whisper elsewhere. -->
+    <linearGradient id="tile-rim" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="924">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.6"/>
+      <stop offset="0.12" stop-color="#fff" stop-opacity="0.08"/>
+      <stop offset="0.85" stop-color="#fff" stop-opacity="0.02"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0.10"/>
+    </linearGradient>
+
+    <!-- ================================================================== -->
+    <!-- Paint: glass                                                       -->
+    <!-- ================================================================== -->
+
+    <!-- Body: nearly clear in the middle, brighter towards both edges
+         (Fresnel), strongest on the lit left side. -->
+    <linearGradient id="glass-body" gradientUnits="userSpaceOnUse" x1="394" y1="0" x2="630" y2="0">
+      <stop offset="0" stop-color="#E4ECFF" stop-opacity="0.28"/>
+      <stop offset="0.2" stop-color="#E4ECFF" stop-opacity="0.07"/>
+      <stop offset="0.5" stop-color="#E4ECFF" stop-opacity="0.015"/>
+      <stop offset="0.8" stop-color="#E4ECFF" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#E4ECFF" stop-opacity="0.16"/>
+    </linearGradient>
+    <!-- The background seen through each bulb, slightly brightened. -->
+    <radialGradient id="glass-lift-top" gradientUnits="userSpaceOnUse" cx="476" cy="352" r="170">
+      <stop offset="0" stop-color="#D6E2FF" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#D6E2FF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glass-lift-bottom" gradientUnits="userSpaceOnUse" cx="476" cy="640" r="150">
+      <stop offset="0" stop-color="#D6E2FF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#D6E2FF" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Soft inner glow along the wall: strong left, faint right. -->
+    <linearGradient id="rim-soft" gradientUnits="userSpaceOnUse" x1="394" y1="0" x2="630" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.7"/>
+      <stop offset="0.5" stop-color="#fff" stop-opacity="0.15"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0.35"/>
+    </linearGradient>
+    <!-- Crisp specular edge: a bright hairline on the left fading out on the right. -->
+    <linearGradient id="rim-crisp" gradientUnits="userSpaceOnUse" x1="394" y1="0" x2="630" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.95"/>
+      <stop offset="0.45" stop-color="#fff" stop-opacity="0.55"/>
+      <stop offset="0.7" stop-color="#fff" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0.10"/>
+    </linearGradient>
+    <!-- Long window reflections running down the left of each bulb. -->
+    <linearGradient id="streak-top" gradientUnits="userSpaceOnUse" x1="0" y1="306" x2="0" y2="466">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.85"/>
+      <stop offset="0.5" stop-color="#fff" stop-opacity="0.35"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="streak-bottom" gradientUnits="userSpaceOnUse" x1="0" y1="574" x2="0" y2="718">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="0.55" stop-color="#fff" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0.2"/>
+    </linearGradient>
+    <!-- Light caught on the curved shoulder just under the top collar. -->
+    <linearGradient id="shoulder-light" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="0.25" stop-color="#fff" stop-opacity="0.75"/>
+      <stop offset="0.6" stop-color="#fff" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </linearGradient>
+    <!-- Warm glow around the falling stream (objectBoundingBox, so it takes
+         the tall elliptical shape of the element it fills). -->
+    <radialGradient id="stream-glow">
+      <stop offset="0" stop-color="#FFC566" stop-opacity="0.42"/>
+      <stop offset="0.5" stop-color="#FFB44E" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#FFB44E" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- ================================================================== -->
+    <!-- Paint: sand                                                        -->
+    <!-- ================================================================== -->
+
+    <!-- Golden, sunlit surfaces deepening to amber below. -->
+    <linearGradient id="sand-top-fill" gradientUnits="userSpaceOnUse" x1="0" y1="400" x2="0" y2="512">
+      <stop offset="0" stop-color="#FFE7AC"/>
+      <stop offset="0.35" stop-color="#FFC14F"/>
+      <stop offset="1" stop-color="#F0982A"/>
+    </linearGradient>
+    <linearGradient id="sand-bottom-fill" gradientUnits="userSpaceOnUse" x1="0" y1="604" x2="0" y2="728">
+      <stop offset="0" stop-color="#FFE4A2"/>
+      <stop offset="0.4" stop-color="#FFBC4C"/>
+      <stop offset="0.85" stop-color="#E58C24"/>
+      <stop offset="1" stop-color="#CC741C"/>
+    </linearGradient>
+    <!-- Rounds the sand: lit on the left, shaded on the right. -->
+    <linearGradient id="sand-shade" gradientUnits="userSpaceOnUse" x1="394" y1="0" x2="630" y2="0">
+      <stop offset="0" stop-color="#FFF6DA" stop-opacity="0.32"/>
+      <stop offset="0.35" stop-color="#FFF6DA" stop-opacity="0"/>
+      <stop offset="0.65" stop-color="#6B300A" stop-opacity="0"/>
+      <stop offset="1" stop-color="#6B300A" stop-opacity="0.32"/>
+    </linearGradient>
+
+    <!-- ================================================================== -->
+    <!-- Paint: caps                                                        -->
+    <!-- ================================================================== -->
+
+    <!-- Brushed champagne gold seen as a turned edge: a highlight band left of
+         centre, falling off towards both ends. -->
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#A07A4A"/>
+      <stop offset="0.08" stop-color="#DAB884"/>
+      <stop offset="0.27" stop-color="#FFF1D6"/>
+      <stop offset="0.4" stop-color="#F3D9AC"/>
+      <stop offset="0.62" stop-color="#D4AE74"/>
+      <stop offset="0.88" stop-color="#B08650"/>
+      <stop offset="1" stop-color="#8A6439"/>
+    </linearGradient>
+    <!-- Bevel: bright top edge, darker underside. -->
+    <linearGradient id="metal-bevel" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.55"/>
+      <stop offset="0.18" stop-color="#fff" stop-opacity="0"/>
+      <stop offset="0.65" stop-color="#3A2610" stop-opacity="0"/>
+      <stop offset="1" stop-color="#3A2610" stop-opacity="0.38"/>
+    </linearGradient>
+
+    <!-- ================================================================== -->
+    <!-- Filters (user-space regions, so blurs never clip at shape bounds) -->
+    <!-- ================================================================== -->
+
+    <filter id="tile-shadow" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024">
+      <feGaussianBlur stdDeviation="12"/>
+      <feOffset dy="12"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.3"/></feComponentTransfer>
+    </filter>
+    <filter id="blur-20" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="20"/></filter>
+    <filter id="blur-8" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="8"/></filter>
+    <filter id="blur-5" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="5"/></filter>
+    <filter id="blur-2" filterUnits="userSpaceOnUse" x="0" y="0" width="1024" height="1024"><feGaussianBlur stdDeviation="2"/></filter>
+  </defs>
+
+  <!-- ==================================================================== -->
+  <!-- Tile                                                                 -->
+  <!-- ==================================================================== -->
+
+  <use id="tile-drop-shadow" href="#tile-shape" fill="#000" filter="url(#tile-shadow)"/>
+
+  <g id="tile" clip-path="url(#tile-clip)">
+    <use href="#tile-shape" fill="url(#tile-base)"/>
+    <use href="#tile-shape" fill="url(#tile-sheen)"/>
+    <use href="#tile-shape" fill="url(#tile-pool)"/>
+    <!-- 5-unit stroke clipped to the tile = a 2.5-unit inner edge light. -->
+    <use href="#tile-shape" fill="none" stroke="url(#tile-rim)" stroke-width="5"/>
+  </g>
+
+  <!-- ==================================================================== -->
+  <!-- Hourglass (design units, scaled 1.04x about the canvas centre)       -->
+  <!-- ==================================================================== -->
+
+  <g id="hourglass" transform="translate(512 512) scale(1.04) translate(-512 -512)">
+
+    <!-- Soft shadow cast straight down: the caps cast a full shadow, the
+         glass a much lighter one. -->
+    <g id="hourglass-shadow" filter="url(#blur-20)" opacity="0.6" transform="translate(0 26)">
+      <use href="#glass-shape" fill="#05061A" opacity="0.45"/>
+      <use href="#cap-top" fill="#05061A"/>
+      <use href="#cap-bottom" fill="#05061A"/>
+    </g>
+
+    <!-- Back of the glass. -->
+    <use id="glass-back" href="#glass-shape" fill="url(#glass-body)"/>
+
+    <!-- Sand, seen through the glass. -->
+    <g id="sand" mask="url(#glass-inside)">
+      <use href="#sand-top-shape" fill="url(#sand-top-fill)"/>
+      <use href="#sand-bottom-shape" fill="url(#sand-bottom-fill)"/>
+      <use href="#sand-top-shape" fill="url(#sand-shade)"/>
+      <use href="#sand-bottom-shape" fill="url(#sand-shade)"/>
+      <!-- Sunlit crests along both sand surfaces. -->
+      <use href="#sand-top-crest" fill="none" stroke="#FFF3D2" stroke-width="3" stroke-opacity="0.8"/>
+      <use href="#sand-bottom-crest" fill="none" stroke="#FFF1CC" stroke-width="3" stroke-opacity="0.75"/>
+      <!-- The falling stream: a soft glow, a fine bright core, and a little
+           bloom where it lands on the pile. -->
+      <line x1="512" y1="496" x2="512" y2="608" stroke="#FFAE45" stroke-width="16" opacity="0.9" filter="url(#blur-8)"/>
+      <line x1="512" y1="496" x2="512" y2="608" stroke="#FFE3A6" stroke-width="3.5"/>
+      <ellipse cx="512" cy="606" rx="22" ry="8" fill="#FFD27E" opacity="0.8" filter="url(#blur-5)"/>
+    </g>
+
+    <!-- Front surface of the glass. -->
+    <g id="glass-front" clip-path="url(#glass-clip)">
+      <use href="#glass-shape" fill="url(#glass-lift-top)"/>
+      <use href="#glass-shape" fill="url(#glass-lift-bottom)"/>
+      <use href="#glass-shape" fill="none" stroke="url(#rim-soft)" stroke-width="18" opacity="0.5" filter="url(#blur-5)"/>
+      <!-- Window reflections down the left of each bulb. -->
+      <path d="M412,312 C405,326 404,346 404,374 C404,410 424,438 452,462 C432,436 418,406 418,374 C418,348 421,330 426,314 Z" fill="url(#streak-top)"/>
+      <path d="M452,584 C420,606 404,630 404,654 C404,680 407,700 412,714 C416,700 418,684 418,664 C418,636 430,610 452,584 Z" fill="url(#streak-bottom)"/>
+      <!-- Small glint on the right shoulder, and light along the top shoulder. -->
+      <path d="M614,320 C619,333 621,348 621,362" fill="none" stroke="#fff" stroke-opacity="0.45" stroke-width="3" stroke-linecap="round"/>
+      <path d="M420,306 C470,312 554,312 604,306" fill="none" stroke="url(#shoulder-light)" stroke-width="3" stroke-linecap="round" filter="url(#blur-2)"/>
+    </g>
+
+    <!-- The stream's glow spills just past the neck. -->
+    <ellipse id="stream-halo" cx="512" cy="552" rx="38" ry="92" fill="url(#stream-glow)"/>
+
+    <!-- Crisp specular edge, drawn last so it stays sharp. -->
+    <use id="glass-edge" href="#glass-shape" fill="none" stroke="url(#rim-crisp)" stroke-width="2.5"/>
+
+    <g id="caps">
+      <use href="#collar-top" fill="url(#metal)"/>
+      <use href="#collar-top" fill="url(#metal-bevel)"/>
+      <use href="#collar-bottom" fill="url(#metal)"/>
+      <use href="#collar-bottom" fill="url(#metal-bevel)"/>
+      <use href="#cap-top" fill="url(#metal)"/>
+      <use href="#cap-top" fill="url(#metal-bevel)"/>
+      <use href="#cap-bottom" fill="url(#metal)"/>
+      <use href="#cap-bottom" fill="url(#metal-bevel)"/>
+    </g>
+  </g>
+</svg>

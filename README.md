@@ -1,41 +1,61 @@
 # Sandglass
 
-A small, fast macOS app for culling **JPG + NEF** photo pairs.
+A fast, native macOS app for culling **JPG + NEF** photo pairs.
 
-Open a folder, step through the photos, flip between the JPG and the NEF with one
-key, flag what you want to keep, then save everything you flagged into a folder
-you choose. Built with SwiftUI and the macOS 26 **Liquid Glass** design language.
+Open a folder, step through the photos, flip between the JPG and the NEF with
+one key, flag what you want to keep, then save everything you flagged into a
+folder you choose. Version 4 is a ground-up rewrite: a native AppKit app with a
+Liquid Glass interface, five layouts, much faster loading, and a rebuilt zoom
+engine.
 
 <p align="center">
-  <em>Header · filmstrip of paired shots · large preview · floating glass control bar</em>
+  <img src="Resources/Icon/Sandglass-1024.png" width="160" alt="Sandglass icon">
 </p>
 
 ---
 
+## What's new in 4.0
+
+- **Native macOS shell.** A real unified toolbar with window title and subtitle
+  (folder · position · flagged · seen), a split view with a floating glass
+  sidebar and an inspector, full menus with every shortcut listed, Open Recent,
+  Settings (⌘,), undo for flags (⌘Z), full screen, drag and drop (onto the window,
+  onto the Dock icon, and out of the thumbnail strip into Finder), and
+  "Open With → Sandglass" for folders, JPGs and NEFs.
+- **Five layouts** (⌘1–⌘5): Filmstrip, Sidebar on Left, Sidebar on Right, Grid,
+  and Photo Only — plus **Compare**, which shows a photo's JPG and NEF side by side
+  with zoom and pan locked together.
+- **Glass design.** Liquid Glass for everything that floats over the photo, a
+  translucent window backdrop (the desktop shows through, frosted and tinted —
+  Fluent's Acrylic), Fluent-style cards, hover states and accent focus rings.
+- **Much faster loading.** Photos decode at the size of the window, NEFs show the
+  camera's own embedded full-size JPEG instead of being demosaiced, neighbours are
+  prepared in the background, and thumbnails load only for what is on screen.
+- **Bounded memory.** Small LRU caches with byte budgets that scale with your
+  Mac's RAM, at most two full-resolution bitmaps at a time, and caches released
+  under memory pressure.
+- **Rebuilt zoom and navigator.** See [Zoom and the navigator](#zoom-and-the-navigator)
+  for the bugs that were fixed.
+- **Flags are remembered** per folder between launches (Settings can turn this off).
+- **A new icon:** a translucent glass hourglass on an indigo tile.
+
 ## What it does
 
-- **One tile per photo, not per file.** A `DSC_0001.JPG` and a `DSC_0001.NEF` are
-  recognised as the same shot and shown once. Files with no sibling
-  (a NEF-only or JPG-only) still appear, marked as such.
-- **Switch variants.** A toggle (or `T`) flips the preview between JPG and NEF.
-  With only one variant on disk the control tells you instead of failing silently.
-- **Flag per variant.** Flagging records *which* file you want, not just *that*
-  you liked the shot:
-  - flag while viewing JPG → the `.JPG` is exported
-  - flag while viewing NEF → the `.NEF` is exported
-  - flag both → **both files** are exported
-- **You choose the destination.** The export sheet lists exactly what will be
-  written, then asks for a folder.
-- **Copy or move.** Default is copy (originals stay put). Move removes the
-  originals from the source folder.
-- **Nothing is ever overwritten.** A name collision becomes `DSC_0001 2.NEF`.
-- **Full-resolution preview.** The large pane is decoded at the image's native
-  size — never a scaled-up thumbnail — and no tint, filter or colour transform is
-  ever applied. Verified by test against real files.
-- **Metadata on demand.** Press `M` (or the ⓘ button) for EXIF: camera, lens,
-  exposure, dates, GPS coordinates and file facts.
-- **Your choice of backdrop.** Six dark presets, or use any picture as the window
-  background with an adjustable dimming level.
+- **One tile per photo, not per file.** `DSC_0001.JPG` and `DSC_0001.NEF` are one
+  shot. Files with no sibling still appear, marked as such.
+- **Switch variants** with `T`. With only one variant on disk the app tells you
+  instead of failing silently.
+- **Flag per variant.** Flagging records *which* file you want:
+  flag while viewing the JPG → the `.JPG` is exported; flag while viewing the NEF
+  → the `.NEF`; flag both → both files.
+- **Export** copies or moves exactly the flagged files to a folder you choose.
+  Nothing is ever overwritten — a collision becomes `DSC_0001 2.NEF`. Copies on
+  the same volume are instant APFS clones, and the copy runs off the main thread.
+- **Metadata on demand** in the inspector (`I`): camera, lens, exposure, dates,
+  colour profile, GPS, the NEF's embedded preview size, and file facts. The photo
+  overlay shows the exposure at a glance (`H` hides it).
+- **Photos are never altered.** No tint, filter or colour transform is applied;
+  bitmaps keep the file's colour space and are colour-matched to the display.
 
 ## Requirements
 
@@ -46,302 +66,263 @@ you choose. Built with SwiftUI and the macOS 26 **Liquid Glass** design language
 ## Build and run
 
 ```bash
-./Scripts/build-app.sh              # release build → dist/Sandglass.app
+./Scripts/build-app.sh
+```
+
+```bash
 open dist/Sandglass.app
 ```
 
-For a debug build: `./Scripts/build-app.sh debug`.
-For a universal build (Intel + Apple silicon): `./Scripts/build-app.sh release universal`.
+`./Scripts/build-app.sh debug` builds a debug app; `./Scripts/build-app.sh release universal`
+builds for Intel and Apple silicon. `./Scripts/make-dmg.sh` packages a universal,
+ad-hoc signed (not notarised) DMG.
 
-## Release DMG
-
-```bash
-./Scripts/make-dmg.sh               # → dist/Sandglass-1.0.dmg
-```
-
-Builds a universal binary and packages it with an `Applications` shortcut for
-drag-install plus a short read-me. The result is ad-hoc signed but **not
-notarised**, so the first launch needs right-click → Open, or
-System Settings → Privacy & Security → "Open Anyway".
-
-Note: creating a disk image attaches a device to the system. If `hdiutil` is
-blocked (sandboxed shells, some CI images) the script falls back to
-`diskutil image create from`.
-
-You can also open a shoot straight from a terminal:
+Open a shoot straight from a terminal:
 
 ```bash
-open -a dist/Sandglass.app --args ~/Pictures/Wedding
-# or run the binary directly
 dist/Sandglass.app/Contents/MacOS/Sandglass ~/Pictures/Wedding
 ```
 
 ## Using it
 
-1. Click the folder chip in the header (or press `⌘O`) and pick a folder of photos.
-2. Move through the folder. The filmstrip shows everything; the large pane shows
-   the shot you are on.
-3. Press `T` to flip between the JPG and the NEF. The header badge shows which
-   variants a photo has, and the flag marker says which ones you kept.
-4. Press `F` to flag what is on screen, or `B` to keep both halves of the pair.
-5. When you reach the end, press `⌘E`, check the list, and choose a destination.
-6. Sandglass copies (or moves) the flagged files and tells you what it did.
+1. Open a folder: the button on the welcome screen, `⌘O`, File ▸ Open Recent, or
+   drop a folder (or a photo, which opens its folder) anywhere on the window or on
+   the Dock icon.
+2. Move through the photos with the arrow keys. `T` flips JPG ↔ NEF.
+3. `F` flags what is on screen, `B` keeps both, `1`/`2` keep only one. `⌘Z` undoes.
+4. `⌘E` shows exactly what will be exported, then asks where.
+
+### Layouts
+
+| Layout | | Best for |
+| --- | --- | --- |
+| Filmstrip | ⌘1 | The classic culling view: thumbnails on a glass shelf under the photo |
+| Sidebar on Left | ⌘2 | A native glass sidebar of thumbnails |
+| Sidebar on Right | ⌘3 | The same, on the other side |
+| Grid | ⌘4 / `G` | A contact sheet with adjustable thumbnail size; `Return` or double-click opens a photo |
+| Photo Only | ⌘5 / `Tab` | Nothing but the photo |
+| Compare | `C` | JPG and NEF side by side, zoom and pan locked together |
+
+The inspector (`I`, ⌥⌘I, or the toolbar) opens on the right in any layout.
+Layout, inspector and thumbnail size are remembered.
 
 ### Keyboard
 
 | Key | Action |
 | --- | --- |
-| `←` `→` / `↑` `↓` / `Space` | Previous / next photo |
-| `J` / `K` | Next / previous photo |
-| `T` | Switch between JPG and NEF |
+| `←` `→` · `J` `K` · `Space` / `⇧Space` | Previous / next photo |
+| `↑` `↓` | Previous / next (by row in Grid) |
+| `Home` `End` | First / last photo |
+| `T` | Switch between JPG and NEF (⌘J / ⌘K pick one) |
 | `F` | Flag the variant on screen |
 | `B` | Flag both JPG and NEF |
-| `1` / `2` | Flag only the JPG / only the NEF |
-| `+` `−` `0` | Zoom in / out / reset |
-| Mouse wheel | Zoom about the pointer (no modifier needed) |
-| Pinch | Zoom about the pointer |
-| ⌘-scroll | Also zooms, if you prefer |
-| Two-finger scroll / drag | Pan while zoomed in |
-| Double-click | Toggle fit ↔ 2× |
-| Pinch / ⌘-scroll | Zoom about the pointer |
+| `1` / `2` | Keep only the JPG / only the NEF |
+| `X` / `⌫` | Clear this photo's flags (⇧⌘⌫ clears all) |
+| `⌘Z` / `⇧⌘Z` | Undo / redo a flag change |
+| `Z` / double-click | Fit ↔ 100% (or 200%, in Settings) |
+| `+` `−` `0` | Zoom in / out by standard steps / fit (⌥⌘0: actual size) |
+| `C` | Compare JPG and NEF |
+| `G` | Grid ↔ the previous layout |
+| `Tab` | Show or hide thumbnails |
+| `I` / `M` | Show or hide the inspector |
+| `H` | Show or hide the photo info overlay |
+| `Esc` | Leave Compare / Grid, or zoom back to fit |
+| `⌘O` `⌘R` `⌘E` | Open folder / reload / export |
+| `⌃⌘F` | Full screen |
+| `⌘/` | Keyboard reference |
 
-When you zoom in, a **navigator** appears in the bottom-right corner: the whole
-photo with a rectangle marking the part on screen. The rectangle tracks every
-zoom and pan, so it always shows where you are. Click or drag inside it to move
-around; it hides again at fit.
+Single-key shortcuts are listed in the menus too; they act only on the main
+window and never while you are typing.
 
-A mouse wheel zooms about the pointer; on a trackpad, pinch or ⌘-scroll zooms and
-two-finger scroll pans.
-| `M` | Show or hide the file info panel |
-| `⌘O` | Open a folder |
-| `⌘E` | Export flagged photos |
-| `⌘J` / `⌘K` | Show the JPG / show the NEF |
-| `B` | Background colour wheel, presets or a picture |
-| `⌘R` | Reload the folder |
-| `?` (header button) | Shortcut reference in-app |
+### Mouse and trackpad
 
-## Preview quality and speed
+- **Scroll wheel** zooms about the pointer. Rolling away from you zooms in,
+  whatever your natural-scrolling setting is.
+- **Pinch** (or ⌘/⌥-scroll) zooms on a trackpad; **two-finger scroll** pans with
+  momentum; **two-finger double-tap** (smart zoom) toggles fit ↔ 100%.
+- **Drag** pans when zoomed in.
+- In the **navigator** (bottom right, shown while zoomed in): drag the rectangle,
+  click elsewhere to jump, scroll to zoom, double-click to fit.
+- Right-click a thumbnail to flag, reveal in Finder or open it; drag a thumbnail
+  out to copy the file somewhere else.
 
-The large pane is not a preview — it is the file, opened. That distinction turned
-out to matter:
+## Zoom and the navigator
 
-- **The file is decoded, not thumbnailed.** `CGImageSourceCreateImageAtIndex`
-  returns the image proper; `CGImageSourceCreateThumbnailAtIndex` can answer with
-  an embedded preview instead, which is exactly the softness this app must not
-  show. EXIF orientation is applied here as a transform, since the direct decode
-  does not apply it.
-- **The whole image, verified.** The app compares the decoded bitmap against the
-  dimensions the file reports about itself, and `--inspect` prints the result:
-  `file 6000x6000 -> 6000x6000  whole image`. A downscaled proxy would be
-  reported as `PARTIAL` rather than passing silently.
-- **Faster, as well as sharper.** Bypassing the thumbnail path took the average
-  from ~95 ms to under 10 ms per photo, because the system no longer decodes and
-  resamples synchronously.
-- **Portrait photos are the right way up.** Cameras store a vertical photo
-  sideways and record the rotation in an EXIF tag, which a direct decode ignores.
-  Sandglass applies it, verified against Apple's own orientation handling for all
-  eight EXIF values. A quarter turn applied the wrong way still looks plausibly
-  shaped, so only a pixel-for-pixel comparison catches it — which is how an
-  upside-down portrait slipped through until now. The rotation is pixel-exact and
-  preserves the colour space.
-- **No colour management surprises.** Pixels are decoded in the file's own colour
-  space and drawn without filters, tint, saturation changes or blend modes.
-- **Zoom magnifies real pixels**, because what is on screen is already the whole
-  file, and the framing is derived from state rather than accumulated movement,
-  so zooming and resizing can never drift the photo into a corner.
-- **Bounded memory.** The native bitmap is held only for the photo on screen and
-  kept out of the shared tile cache; one 24 MP decode is ~144 MB. Files above
-  12000 px on the long edge are scaled on decode so an extreme scan cannot
-  exhaust memory.
+The canvas is a layer holding the decoded bitmap, placed by a single transform, so
+zoom and pan run at display refresh rate. All of its geometry comes from a
+`Viewport` (`Sources/Sandglass/Core/Viewport.swift`) that stores the framing in
+resolution-independent terms — a magnification on top of fit, and the normalised
+point of the photo at the centre of the pane — and derives everything else. It is
+pure Swift and covered by tests that run on any platform.
 
-## Layout
+Bugs fixed by the rewrite:
 
-The header's layout button switches where the filmstrip sits, and the choice is
-remembered:
+- **Wheel zoom ran backwards** for anyone using natural scrolling (the macOS
+  default), and a fast flick could produce a zero or negative zoom factor. Zoom
+  now follows the physical direction and every step is a bounded, multiplicative
+  factor, so zooming in and out by the same amount returns exactly to the start.
+- **The photo jumped when the sharper bitmap arrived.** The old centre was stored
+  in pixels of the *previous* bitmap. The framing is now resolution-independent.
+- **Resizing the window or toggling a panel reset the zoom**, flashed a spinner and
+  re-decoded the whole file. Now the magnification and centre are kept (at 100% you
+  stay at 100%) and nothing is re-decoded.
+- **Scrolling in a sheet or popover zoomed the photo behind it** — a global event
+  monitor ignored which window an event belonged to. The canvas now receives events
+  the normal AppKit way.
+- **The navigator lagged and misled.** Its rectangle was fed through throttled
+  SwiftUI state, it was covered by the "loading full resolution" chip, grabbing the
+  rectangle made it jump under the pointer, and panoramas were cropped so the
+  rectangle sat on the wrong region. The navigator is now drawn with layers and
+  updated on every frame, keeps the photo's exact aspect ratio, remembers where you
+  grabbed it, shades everything outside the visible region, and moves above the
+  control bar if the window is too narrow for both.
+- **Aliasing at fit**: a full-resolution bitmap was shrunk with nearest-neighbour
+  filtering. At fit the screen-sized rendition (downsampled by ImageIO) is shown;
+  every pixel is swapped in once zoom magnifies past it, drawn crisply with
+  nearest-neighbour so 100% and beyond show real pixels.
 
-- **Left** or **Right** — two tiles across, down the side of the photo
-- **Photo only** — no filmstrip; just the photo
+## Why it is fast
 
-## Background## Background
+- **Decode to the size on screen.** ImageIO scales JPEGs while decoding (in the DCT
+  domain), so a 24 MP file reaches a window-sized bitmap in a fraction of the time
+  and a sixth of the memory of a full decode. The size follows the pane, in steps,
+  so resizing does not re-decode.
+- **Use the camera's JPEG for NEFs.** Nikon stores a full-size JPEG rendering in
+  every NEF. `RawPreviewLocator` walks the TIFF structure (IFDs, SubIFDs, the
+  maker-note preview) to find it without decoding anything, and decoding it costs
+  the same as a JPEG file. The raw data is only developed if a camera embedded a
+  small preview and you zoom past it (Settings can turn that off).
+- **Never show the 160 px EXIF thumbnail.** Decodes always come from the image
+  proper, which is what keeps previews sharp.
+- **Decode in the background, eagerly.** All decoding happens off the main thread
+  and is forced to complete there, so the first draw never stalls the interface.
+- **Prepare what is next.** The neighbours (mostly in the direction you are moving)
+  and the other variant are decoded at low priority while you look; full resolution
+  is decoded after a short pause on a photo, so zooming is instant. Holding an
+  arrow key never queues work: anything no longer wanted is cancelled.
+- **Thumbnails only for what is visible.** The browser is an `NSCollectionView`
+  that recycles tiles; each tile requests its thumbnail when it appears and cancels
+  it when it scrolls away, and identical requests share one decode.
+- **Fine-grained updates.** State is `@Observable`; a flag change redraws one tile
+  and the controls, not the window.
 
-The **◐** button in the header (or `B`) opens the background picker:
+### A note on NEF previews
 
-- **Preset** — six ready-made backdrops.
-- **Wheel** — a full colour picker for any colour you like, plus a row of neutral
-  starting points and a live hex readout.
-- **Picture** — pick any image. It is copied into Application Support and
-  downscaled to a 2560 px long edge, so it keeps working even if you move the
-  original. A dimming slider darkens it to taste.
+Some files carry no preview macOS can read. Sandglass says *"No preview
+available"* and offers **Open in Default App**; flagging and exporting still work.
 
-The interface automatically switches between dark and light text based on how
-bright your chosen backdrop is. This affects only the backdrop — photographs are
-never altered.
+## Design
+
+Liquid Glass (macOS 26) is used for everything that floats over the photo — the
+control bar, the photo overlay, the navigator, the filmstrip shelf — so the
+picture stays the brightest thing on screen. The window backdrop is translucent
+glass by default; Settings offers a tint slider, a solid colour, or a picture of
+your own (with dimming), and a neutral tone (black, charcoal, mid grey) behind the
+photo for colour-critical judgement. From Microsoft's Fluent design come the
+quieter conventions: layered cards with a hairline stroke, a hover highlight on
+everything clickable, a clear type ramp, and an accent-coloured focus ring around
+the selected thumbnail. Flags are amber throughout.
 
 ## How files are recognised
 
 Pairing is by **base name, case-insensitively**: `DSC_0001.JPG` and `dsc_0001.nef`
-are one shot.
-
-Deliberately, it does **not** try to fold numeric suffixes together:
-`DSC_0002-2.NEF` is treated as its own shot rather than being guessed to belong to
-`DSC_0002`, because camera numbering makes that guess wrong often enough to be
-harmful. `IMG_1` and `IMG_10` likewise stay separate.
-
-Managed extensions are `jpg`, `jpeg` and `nef`. Other formats (`.CR2`, `.ARW`,
-`.PNG`, …) are ignored. Only the chosen folder is scanned; subfolders are not.
+are one shot. Numeric suffixes are not folded together — `DSC_0002-2.NEF` is its
+own shot, and `IMG_1` and `IMG_10` stay separate. Managed extensions are `jpg`,
+`jpeg` and `nef`; other formats are ignored, and only the chosen folder is scanned.
 
 ## Project layout
 
 ```
 Sources/Sandglass/
-  main.swift              entry point, CLI dispatch
-  AppDelegate.swift       window, menu bar, global keyboard handling
-  Models.swift            FileKind, FlagSelection, Shot, base-name pairing
-  FolderScanner.swift     folder enumeration → shots
-  ThumbnailLoader.swift   concurrent ImageIO decoding + LRU cache
-  LibraryModel.swift      app state: folder, selection, flags, previews, export
-  Exporter.swift          copy/move engine
-  MetadataReader.swift    EXIF / GPS / file facts
-  BackgroundSettings.swift  backdrop presets, image store and loader
-  RootView.swift          layout, commands, help sheet
-  HeaderBar.swift         title, folder picker, progress, background + info
-  PhotoGridView.swift     the filmstrip
-  ImageCanvas.swift       layer-backed zoom/pan surface
-  NavigatorView.swift     the corner navigator shown while zoomed in
-  PreviewPane.swift       preview states and overlays
-  MetadataPanel.swift     the info sidebar
-  BackgroundPicker.swift  backdrop chooser popover
-  Controls.swift          variant toggle, flag buttons, navigation, zoom
-  ExportSheet.swift       export confirmation
-  GlassStyle.swift        shared Liquid Glass styling
-Tests/SandglassTests/     unit tests over the real logic
-Tests/Fixtures/           a sample shoot used by the tests
-Scripts/build-app.sh      build + .app assembly
-Scripts/make-dmg.sh       universal release DMG
-Scripts/make-icon.swift   draws the app icon in code
-Resources/Sandglass.icns  generated icon
+  Core/           platform-independent: builds and is tested on Linux too
+    Shot.swift              file kinds, flags, shots, pairing, folder scanning
+    Library.swift           the culling session (@Observable): navigation, flags, sessions
+    Exporter.swift          export planning and the off-main copy/move engine
+    Viewport.swift          zoom/pan geometry behind the canvas and navigator
+    ZoomInput.swift         scroll-wheel, trackpad and pinch interpretation
+    NavigatorGeometry.swift navigator mapping and drag behaviour
+    RawPreviewLocator.swift finds embedded JPEG previews inside NEF/TIFF files
+    LRUCache.swift          cost-bounded LRU cache
+    Commands.swift          commands, layouts, the key map and shortcut reference
+    SessionStore.swift      remembers flags and position per folder
+    AppSettings.swift       preferences (@Observable, UserDefaults)
+    ObservationLoop.swift   lets AppKit controllers follow @Observable state
+    Formatting.swift        percentages, shutter speeds, sizes…
+  Imaging/        ImageIO decoding, preview/thumbnail/metadata stores
+  Viewer/         the canvas, navigator and photo pane
+  Browser/        the NSCollectionView thumbnail browser
+  Window/         window controller, toolbar, split view, layouts, backdrop
+  Interface/      SwiftUI: design system, control bar, inspector, export, settings
+  App/            entry point, app delegate, menus, key routing
+  Diagnostics/    --report / --inspect / --bench
+Tests/SandglassTests/
+  Core/           runs on macOS and Linux
+  App/            decoding, orientation, canvas rendering, preview pipeline, metadata
+Tests/Fixtures/   a sample shoot, orientation fixtures, synthetic NEFs (+ generator)
+Resources/Icon/   the icon's SVG sources and a 1024 px preview
+Scripts/          build-app.sh, make-dmg.sh, make-icon.py
 ```
 
 ## App icon
 
-The icon is a Liquid Glass hourglass, **drawn programmatically** in
-`Scripts/make-icon.swift` with Core Graphics — a smoked-glass squircle tile with a
-frosted hourglass and champagne sand. Regenerate it with:
+The icon is designed as SVG (`Resources/Icon/Sandglass.svg`, plus a bolder
+`Sandglass-small.svg` for 16–64 px) and packed into `Resources/Sandglass.icns`,
+which is committed. To regenerate it:
 
 ```bash
-./Scripts/make-icon.sh
+python3 -m pip install --user --only-binary=:all: resvg-py
 ```
 
-Because it is code rather than a binary blob, the icon is reproducible and
-reviewable as a diff. It is compiled into `Resources/Sandglass.icns` at build time
-if missing.
+```bash
+python3 Scripts/make-icon.py
+```
+
+The output is deterministic, and the script verifies the `.icns` it writes. The
+tile follows Apple's icon grid (an 824 px continuous-corner squircle on a 1024 px
+canvas, with the standard shadow).
 
 ## Verification
 
+On a Mac:
+
 ```bash
-CLANG_MODULE_CACHE_PATH="$PWD/.cache/clang" \
-SWIFTPM_MODULECACHE_OVERRIDE="$PWD/.cache/module" \
-swift test --disable-sandbox --cache-path "$PWD/.cache/swiftpm"
+swift test
 ```
 
-58 tests cover variant detection, pairing (including the cases above), flag
-semantics, export planning, and real files on disk — scanning a folder, copying
-exactly the flagged variants, moving them out of the source, and refusing to
-overwrite an existing file. Previews are decoded from real files, including a
-genuine Nikon NEF, and are asserted to be pixel-exact and colour-space preserving.
-Metadata parsing is covered against a fixture with real EXIF and GPS. The preview
-pipeline is covered end to end: caching a grid tile first, then asserting the
-large preview still reaches full resolution at the correct display size.
+The core suite also runs on Linux (`swift test` there builds just `Core/`). It
+covers pairing, flags, export planning and real copy/move/no-overwrite on disk,
+the culling session (navigation, variant fallback, flag rules, session
+persistence, reload), the viewport (fit, anchored zoom, drift, resizing, bitmap
+swaps, pan bounds, zoom steps), scroll interpretation (wheel direction under
+natural scrolling, bounded factors), navigator geometry, the NEF preview locator
+(including big-endian files, maker-note previews, corrupt lengths, truncated files
+and a fuzz test), the LRU cache, the key map and settings.
 
-There is also a headless end-to-end check that runs the real scan → flag → export
-path on a folder of your choosing and prints what it did:
+The macOS suite decodes real files — including a genuine Nikon NEF and synthetic
+NEFs with embedded previews, checked pixel by pixel for orientation — compares
+orientation handling with Apple's, renders the canvas through its layer tree to
+prove that zoom magnifies real pixels with no smoothing, that a sharper bitmap
+replaces a softer one without moving, and that resizing keeps the framing, and runs
+the preview pipeline end to end.
+
+CI (`.github/workflows/ci.yml`) builds, tests and packages the app on a macOS 26
+runner on every push and uploads `Sandglass.app` as an artifact.
+
+Diagnostics that report facts about a folder of your own:
 
 ```bash
 dist/Sandglass.app/Contents/MacOS/Sandglass --report ~/Pictures/Wedding
 ```
 
-And two diagnostics for image quality and speed, which report facts rather than
-impressions:
+```bash
+dist/Sandglass.app/Contents/MacOS/Sandglass --inspect ~/Pictures/Wedding
+```
 
 ```bash
-# Is the pane receiving each file's whole image, or a proxy?
-dist/Sandglass.app/Contents/MacOS/Sandglass --inspect ~/Pictures/Wedding
-
-# How long does opening a folder and moving through it really take?
-dist/Sandglass.app/Contents/MacOS/Sandglass --flow ~/Pictures/Wedding
-
-# Cold decode cost at every size the app requests
 dist/Sandglass.app/Contents/MacOS/Sandglass --bench ~/Pictures/Wedding
 ```
 
-## How the preview is rendered
-
-The large pane is a `CALayer` whose `contents` is the decoded `CGImage`, sized to
-the image's **own pixel dimensions** and fitted to the pane by a single
-`CATransform3D`. Zoom and pan change that transform and nothing else.
-
-This matters more than it sounds. The obvious approach — a SwiftUI `Image` with
-`scaleEffect` — fails in two separate ways:
-
-1. **It cannot keep up.** Every gesture change invalidates layout for the whole
-   view tree, so zoom lags the cursor instead of tracking it. A layer transform
-   is handled by the compositor, so it follows the hand at refresh rate.
-2. **It cannot stay sharp.** `contentsGravity = .resizeAspect` rasterises the
-   bitmap to fit the *view rectangle*. Magnifying that flattened layer is
-   magnifying a screenshot, so zooming in only ever gets softer. Sizing the layer
-   to the photo's true pixels and scaling geometrically means zoom magnifies real
-   pixels.
-
-Three further details, each of which independently softens the image if missed:
-
-- **The image layer's `contentsScale` is pinned to `1`.** Left at the screen's
-  scale (2 on Retina) the layer allocates a 2× backing store and interpolates the
-  photo up into it before the transform even runs.
-- **The view's own layer composites at the display scale.** Left at the default 1
-  the whole pane is rendered into a 1× backing store and then blown up to fill a
-  Retina screen, softening every pixel.
-- **Decode budgets are part of the cache key.** Without that, a 320 px grid tile
-  and the large preview collide: whichever finishes first wins, and the pane ends
-  up drawing a tile-sized image across the whole window.
-
-The pane also refuses to show a low-resolution bitmap at all. It will fall back to
-a rendition decoded at the *current* budget, but never to a grid tile — briefly
-showing a loading state is far better than showing a mosaic of the photo.
-
-These are covered by tests that render the canvas and *measure* the output:
-magnifying a 3 px checkerboard by 2×/3×/4× must produce runs of exactly 6/9/12
-pixels with **zero** intermediate grey pixels. Interpolation of any kind fails
-that assertion.
-
-## Performance notes
-
-Measured with `Sandglass --bench <folder>` and `Sandglass --flow <folder>` on
-24 MP files, a cold decode is tens of milliseconds, so raw decode speed is not
-what makes a viewer feel slow. What matters is not asking for the wrong thing:
-
-- **Decode only what the pane can show.** The pixel budget is derived from the
-  pane's real size (`--flow` reports it), not a fixed number. A fixed 4200 px
-  budget on a 6000 px file costs ~70 MB per image, which thrashes the cache and
-  forces a fresh decode on every step. The shipping window asks for ~1968 px.
-- **The visible photo goes first.** Single-file requests are independent
-  high-priority tasks; filmstrip tiles go through a lower-priority group, so
-  hundreds of queued tiles cannot starve the photo on screen.
-- **No filesystem calls in the decode path.** Cache lookup takes a path, not a
-  modification-date probe, so a grid render does not serialise hundreds of stat
-  calls behind one actor.
-- **Lazy bitmap realisation.** Thumbnails are created without forcing an
-  immediate full decode, so a tile that scrolls past never pays for one.
-- **Zooming is already sharp.** Because the pane always holds a native decode,
-  zooming magnifies real pixels with nothing further to fetch.
-
-Measured on a 24 MP shoot: folder open 18 ms, average preview 42 ms.
-
-### A note on NEF previews
-
-Previews are decoded with ImageIO, which reads the **embedded preview** inside a
-NEF rather than demosaicing the full raw — that is what keeps the grid fast.
-
-Some raw files carry no preview that macOS can read. When that happens Sandglass
-does not stall or crash: the tile and the preview pane say *"No preview
-available"* and offer **Open in Default App**. Flagging and exporting are
-unaffected, so such a file can still be culled and kept.
+`--report` runs scan → flag → export into a temporary folder and verifies what
+landed; `--inspect` shows what each file decodes to (screen-sized and full), from
+where (JPEG, camera preview, raw decode) and how long it took; `--bench` times cold
+decodes at the sizes the app requests.
