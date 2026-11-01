@@ -5,8 +5,8 @@ import AppKit
 /// folders you were working on.
 struct WelcomeView: View {
     let recentFolders: [URL]
-    let openFolder: () -> Void
-    let openRecent: (URL) -> Void
+    let openFolder: @MainActor () -> Void
+    let openRecent: @MainActor (URL) -> Void
 
     var body: some View {
         VStack(spacing: 26) {
@@ -65,7 +65,7 @@ struct WelcomeView: View {
 /// A recent folder: icon, name and where it lives, highlighted on hover.
 private struct RecentFolderRow: View {
     let url: URL
-    let action: () -> Void
+    let action: @MainActor () -> Void
 
     @State private var isHovering = false
 

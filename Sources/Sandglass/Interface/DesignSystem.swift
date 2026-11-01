@@ -75,7 +75,7 @@ struct GlassButton<Label: View>: View {
     var help: String
     var tint: Color?
     var isEnabled = true
-    let action: () -> Void
+    let action: @MainActor () -> Void
     @ViewBuilder let label: () -> Label
 
     @State private var isHovering = false

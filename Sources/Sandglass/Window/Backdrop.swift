@@ -171,8 +171,8 @@ final class DropTargetView: NSView {
         let urls = info.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] ?? []
         return urls.filter { url in
             var isDirectory: ObjCBool = false
-            FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
-            return isDirectory.boolValue || FileKind.from(url: url) != nil
+            let exists = FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+            return exists && (isDirectory.boolValue || FileKind.from(url: url) != nil)
         }
     }
 }

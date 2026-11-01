@@ -43,7 +43,7 @@ final class ExportModel {
         let exportMode = self.mode
         phase = .running(done: 0, total: files.count)
         task = Task { [weak self] in
-            let result = await Exporter.run(files: files, destination: destination, mode: exportMode) { done, total in
+            let result = await Exporter.run(files: files, destination: destination, mode: exportMode) { [weak self] done, total in
                 Task { @MainActor [weak self] in self?.progress(done, total) }
             }
             self?.phase = .finished(result, destination: destination)
@@ -64,9 +64,9 @@ final class ExportModel {
 /// shows exactly which files of which photos will be written.
 struct ExportSheetView: View {
     @Bindable var model: ExportModel
-    let chooseDestination: () -> URL?
-    let reveal: (URL) -> Void
-    let close: () -> Void
+    let chooseDestination: @MainActor () -> URL?
+    let reveal: @MainActor (URL) -> Void
+    let close: @MainActor () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {

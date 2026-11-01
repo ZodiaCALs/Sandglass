@@ -5,7 +5,7 @@ import SwiftUI
 struct InspectorView: View {
     let library: Library
     let metadata: MetadataStore
-    let perform: (Command) -> Void
+    let perform: @MainActor (Command) -> Void
 
     var body: some View {
         Group {
@@ -57,9 +57,10 @@ struct InspectorView: View {
                 .foregroundStyle(.secondary)
             ForEach(FileKind.allCases, id: \.self) { kind in
                 let exists = shot.url(for: kind) != nil
+                let perform = perform
                 Toggle(isOn: Binding(
                     get: { selection.contains(.kind(kind)) },
-                    set: { _ in perform(.toggleFlag(kind)) }
+                    set: { _ in MainActor.assumeIsolated { perform(.toggleFlag(kind)) } }
                 )) {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(kind.label)

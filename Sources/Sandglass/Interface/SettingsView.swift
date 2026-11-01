@@ -5,8 +5,8 @@ import AppKit
 /// Fluent's settings-page pattern.
 struct SettingsView: View {
     @Bindable var settings: AppSettings
-    let choosePicture: () -> Void
-    let removePicture: () -> Void
+    let choosePicture: @MainActor () -> Void
+    let removePicture: @MainActor () -> Void
     let hasPicture: Bool
 
     var body: some View {
@@ -114,15 +114,22 @@ struct SettingsView: View {
     }
 
     private var customColor: Binding<Color> {
-        Binding(
-            get: { Color(nsColor: NSColor(RGBColor(hex: settings.backdropColorHex) ?? RGBColor(red: 0.08, green: 0.1, blue: 0.18))) },
+        let settings = settings
+        return Binding(
+            get: {
+                MainActor.assumeIsolated {
+                    let colour = RGBColor(hex: settings.backdropColorHex) ?? RGBColor(red: 0.08, green: 0.1, blue: 0.18)
+                    return Color(nsColor: NSColor(colour))
+                }
+            },
             set: { newValue in
                 guard let srgb = NSColor(newValue).usingColorSpace(.sRGB) else { return }
-                settings.backdropColorHex = RGBColor(
+                let hex = RGBColor(
                     red: Double(srgb.redComponent),
                     green: Double(srgb.greenComponent),
                     blue: Double(srgb.blueComponent)
                 ).hex
+                MainActor.assumeIsolated { settings.backdropColorHex = hex }
             }
         )
     }
